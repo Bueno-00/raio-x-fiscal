@@ -94,8 +94,7 @@ def test_dag_imports_in_airflow():
 
     bag = DagBag(dag_folder=str(DAG_FILE.parent), include_examples=False)
     assert not bag.import_errors, bag.import_errors
-    dag = bag.get_dag("raio_x_fiscal_pipeline")
-    assert dag is not None
+    dag = bag.dags["raio_x_fiscal_pipeline"]  # dict access: no metadata DB needed
     assert set(dag.task_ids) == {
         "months",
         "download",

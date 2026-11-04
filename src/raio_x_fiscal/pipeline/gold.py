@@ -159,15 +159,21 @@ def _facts(con: duckdb.DuckDBPyConnection, salt: str) -> None:
     )
     con.execute(
         f"""CREATE OR REPLACE TABLE fato_item AS
-            SELECT item_id, chave_acesso, numero_produto, mes_referencia, data_emissao,
-                   {emitente_id} AS emitente_id, emitente_tipo, emitente_uf,
-                   destinatario_cnpj, destinatario_uf, orgao_codigo, orgao_superior_codigo,
-                   natureza_operacao, cfop,
-                   ncm_codigo, ncm_codigo IS NOT NULL AS ncm_valido, ncm_raw,
-                   substr(ncm_codigo, 1, 2) AS capitulo,
-                   descricao_produto, descricao_normalizada,
-                   quantidade, unidade, valor_unitario, valor_total
-            FROM silver_item"""
+            SELECT i.item_id, i.chave_acesso, i.numero_produto, i.mes_referencia, i.data_emissao,
+                   {emitente_id.replace("emitente_", "i.emitente_")} AS emitente_id,
+                   i.emitente_tipo, i.emitente_uf,
+                   i.destinatario_cnpj, i.destinatario_uf,
+                   -- the item file says 'Sem informação' for the organ in ~83% of rows while the
+                   -- note file has it for ~98%: take the note's value when the item lacks it
+                   coalesce(i.orgao_codigo, n.orgao_codigo) AS orgao_codigo,
+                   coalesce(i.orgao_superior_codigo, n.orgao_superior_codigo) AS orgao_superior_codigo,
+                   i.natureza_operacao, i.cfop,
+                   i.ncm_codigo, i.ncm_codigo IS NOT NULL AS ncm_valido, i.ncm_raw,
+                   substr(i.ncm_codigo, 1, 2) AS capitulo,
+                   i.descricao_produto, i.descricao_normalizada,
+                   i.quantidade, i.unidade, i.valor_unitario, i.valor_total
+            FROM silver_item i
+            LEFT JOIN silver_nota n ON n.chave_acesso = i.chave_acesso"""
     )
 
 
