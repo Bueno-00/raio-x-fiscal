@@ -287,8 +287,8 @@ Saude gastou com NCM 3004 em agosto, por UF?") respondidas por text-to-SQL **som
 read-only, lista de tabelas permitidas, limite de linhas e tempo), com **trava numerica**: todo numero
 no texto da resposta tem que existir no resultado da query, senao a resposta e bloqueada e refeita.
 Evals com perguntas de resposta conhecida e ataques de injecao, custo por papel, juiz pinado, guarda de
-orcamento e relatorio HTML, reaproveitando o harness de
-[whatsapp-agent-evals](https://github.com/rafabueno29/whatsapp-agent-evals). Demo com login.
+orcamento e relatorio HTML, reaproveitando o harness do projeto `whatsapp-agent-evals` (12 personas, juiz
+pinado, custo por papel, publicacao prevista junto com este). Demo com login.
 
 ## Testes e lint
 
