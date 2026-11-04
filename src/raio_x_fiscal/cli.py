@@ -1,9 +1,9 @@
 """Command-line entry point (`rxf`), used by the Makefile on the VPS.
 
-    rxf pipeline --meses 202504-202509      # download -> bronze -> silver -> quality -> gold
-    rxf bronze --meses 202509                # one layer, one or more months
-    rxf ml-dataset / ml-train / ml-audit     # baseline descricao -> NCM
-    rxf publish                              # anonymised dataset + card for Kaggle/HF
+rxf pipeline --meses 202504-202509      # download -> bronze -> silver -> quality -> gold
+rxf bronze --meses 202509                # one layer, one or more months
+rxf ml-dataset / ml-train / ml-audit     # baseline descricao -> NCM
+rxf publish                              # anonymised dataset + card for Kaggle/HF
 """
 
 from __future__ import annotations
@@ -38,7 +38,10 @@ def parse_months(spec: list[str]) -> list[str]:
 
 def _add_months(p: argparse.ArgumentParser, required: bool = True) -> None:
     p.add_argument(
-        "--meses", nargs="+", required=required, metavar="AAAAMM",
+        "--meses",
+        nargs="+",
+        required=required,
+        metavar="AAAAMM",
         help="meses AAAAMM ou intervalo AAAAMM-AAAAMM (ex.: 202504-202509)",
     )
 

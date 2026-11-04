@@ -1,0 +1,90 @@
+# Airflow local (LocalExecutor + Postgres) para rodar a DAG fora da VPS de producao.
+#
+#   cd airflow
+#   echo "AIRFLOW_UID=$(id -u)" > .env
+#   docker compose up airflow-init && docker compose up
+#   -> http://localhost:8080  (usuario/senha: airflow / airflow)
+#
+# O repositorio e montado em /opt/raio-x-fiscal; `_PIP_ADDITIONAL_REQUIREMENTS` instala o pacote
+# em modo editavel na subida (bom para desenvolvimento; em producao gere uma imagem propria).
+# `data/` e `models/` sao os mesmos diretorios do host, entao `rxf` por CLI e a DAG compartilham
+# as camadas bronze/silver/gold.
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.10.5-python3.12
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/raio-x-fiscal/dags
+    AIRFLOW__CORE__PARALLELISM: "2"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    _PIP_ADDITIONAL_REQUIREMENTS: "-e /opt/raio-x-fiscal"
+    RXF_DATA_DIR: /opt/raio-x-fiscal/data
+    RXF_MODELS_DIR: /opt/raio-x-fiscal/models
+    RXF_DUCKDB_MEMORY: 1500MB
+    RXF_DUCKDB_THREADS: "2"
+  volumes:
+    - ..:/opt/raio-x-fiscal
+    - ./logs:/opt/airflow/logs
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+    restart: always
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create --username airflow --password airflow --firstname Rafael \
+          --lastname Bueno --role Admin --email rafapbueno29@gmail.com || true
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    mem_limit: 3g
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-db:

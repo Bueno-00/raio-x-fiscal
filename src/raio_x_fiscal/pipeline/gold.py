@@ -59,12 +59,10 @@ def build_gold(paths: Paths, con: duckdb.DuckDBPyConnection | None = None) -> di
     nota_glob = silver_glob(paths, "nota")
     try:
         con.execute(
-            f"CREATE OR REPLACE VIEW silver_item AS "
-            f"SELECT * FROM read_parquet('{item_glob}', hive_partitioning=false)"
+            f"CREATE OR REPLACE VIEW silver_item AS SELECT * FROM read_parquet('{item_glob}', hive_partitioning=false)"
         )
         con.execute(
-            f"CREATE OR REPLACE VIEW silver_nota AS "
-            f"SELECT * FROM read_parquet('{nota_glob}', hive_partitioning=false)"
+            f"CREATE OR REPLACE VIEW silver_nota AS SELECT * FROM read_parquet('{nota_glob}', hive_partitioning=false)"
         )
         _seeds(con)
         _dims(con)

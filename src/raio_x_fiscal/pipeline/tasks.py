@@ -34,7 +34,9 @@ def task_silver(month: str, paths: Paths | None = None) -> dict:
     paths = paths or Paths.from_env()
     with connect() as con:
         manifests = silver.build_month(month, paths, con)
-    return {e: {k: m[k] for k in ("rows_in", "rows_out", "rejected", "duplicates_removed")} for e, m in manifests.items()}
+    return {
+        e: {k: m[k] for k in ("rows_in", "rows_out", "rejected", "duplicates_removed")} for e, m in manifests.items()
+    }
 
 
 def task_quality_month(month: str, paths: Paths | None = None) -> dict:

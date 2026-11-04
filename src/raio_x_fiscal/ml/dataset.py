@@ -70,7 +70,7 @@ def build_splits(paths: Paths, test_month: str, valid_month: str) -> dict:
                            t.ncm_codigo AS ncm_lookup
                     FROM ml_ncm_items i LEFT JOIN train t USING (descricao_normalizada)
                     WHERE i.mes_referencia = '{labels[month]}'
-                ) TO '{(paths.ml / f'{name}.parquet').as_posix()}' (FORMAT PARQUET)"""
+                ) TO '{(paths.ml / f"{name}.parquet").as_posix()}' (FORMAT PARQUET)"""
             )
 
         stats = {

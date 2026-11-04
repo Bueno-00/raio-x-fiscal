@@ -118,9 +118,7 @@ def emitente_tipo(cpf_cnpj: str | None) -> str:
 
 
 def sql_decimal_br(col: str, scale: int = 2) -> str:
-    return (
-        f"TRY_CAST(replace(replace(trim({col}), '.', ''), ',', '.') AS DECIMAL(18,{scale}))"
-    )
+    return f"TRY_CAST(replace(replace(trim({col}), '.', ''), ',', '.') AS DECIMAL(18,{scale}))"
 
 
 def sql_date_br(col: str) -> str:

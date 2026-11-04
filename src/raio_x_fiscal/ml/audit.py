@@ -59,8 +59,10 @@ def run_audit(paths: Paths, sample_size: int = 40, threshold: float | None = Non
     n_alert = len(alerts)
     valor_alertas = float(alerts["valor_total"].sum())
     by_cap = (
-        alerts.groupby("capitulo").agg(n=("item_id", "size"), valor=("valor_total", "sum"))
-        .sort_values("n", ascending=False).head(15)
+        alerts.groupby("capitulo")
+        .agg(n=("item_id", "size"), valor=("valor_total", "sum"))
+        .sort_values("n", ascending=False)
+        .head(15)
     )
     cross_chapter = int((~alerts["mesmo_capitulo"]).sum())
     uniq_desc_alerts = int(alerts["descricao_normalizada"].nunique())
@@ -68,22 +70,47 @@ def run_audit(paths: Paths, sample_size: int = 40, threshold: float | None = Non
 
     # Pairs (declared -> predicted) that repeat: systematic disagreement, the cheapest to review.
     pairs = (
-        alerts.groupby(["ncm_codigo", "ncm_previsto"]).agg(n=("item_id", "size"), valor=("valor_total", "sum"),
-                                                          exemplo=("descricao_produto", "first"))
-        .sort_values("n", ascending=False).head(15).reset_index()
+        alerts.groupby(["ncm_codigo", "ncm_previsto"])
+        .agg(n=("item_id", "size"), valor=("valor_total", "sum"), exemplo=("descricao_produto", "first"))
+        .sort_values("n", ascending=False)
+        .head(15)
+        .reset_index()
     )
 
     rng = np.random.default_rng(42)
     sample_idx = rng.choice(alerts.index.to_numpy(), size=min(sample_size, n_alert), replace=False)
-    sample = alerts.loc[sample_idx, ["item_id", "descricao_produto", "ncm_codigo", "ncm_previsto", "confianca",
-                                     "valor_total", "unidade", "seen_in_train"]].copy()
+    sample = alerts.loc[
+        sample_idx,
+        [
+            "item_id",
+            "descricao_produto",
+            "ncm_codigo",
+            "ncm_previsto",
+            "confianca",
+            "valor_total",
+            "unidade",
+            "seen_in_train",
+        ],
+    ].copy()
     sample["ncm_declarado_desc"] = sample["ncm_codigo"].map(lambda c: ncm_names.get(c) or "")
     sample["ncm_previsto_desc"] = sample["ncm_previsto"].map(lambda c: ncm_names.get(c) or "")
     sample = sample.sort_values("confianca", ascending=False).reset_index(drop=True)
     sample.insert(0, "n", range(1, len(sample) + 1))
 
-    alerts_out = alerts[["item_id", "mes_referencia", "descricao_produto", "ncm_codigo", "ncm_previsto", "confianca",
-                         "valor_total", "capitulo", "capitulo_previsto", "seen_in_train"]]
+    alerts_out = alerts[
+        [
+            "item_id",
+            "mes_referencia",
+            "descricao_produto",
+            "ncm_codigo",
+            "ncm_previsto",
+            "confianca",
+            "valor_total",
+            "capitulo",
+            "capitulo_previsto",
+            "seen_in_train",
+        ]
+    ]
     alerts_out.to_parquet(paths.ml / "ncm_alerts_test.parquet", index=False)
     sample.to_csv(paths.ml / "ncm_audit_sample.csv", index=False)
 
@@ -111,38 +138,56 @@ def run_audit(paths: Paths, sample_size: int = 40, threshold: float | None = Non
 
 def _write_report(summary, by_cap, pairs, sample, ncm_names) -> None:
     L = ["# Auditoria de NCM (mes de teste)", ""]
-    L.append(f"Gerado em {summary['generated_at']}. Mes {summary['mes']}. "
-             f"Limiar de confianca **{summary['limiar']}** (escolhido no mes de validacao para precisao >= "
-             f"{int(100 * summary['precisao_alvo_validacao'])}% do top-1).")
+    L.append(
+        f"Gerado em {summary['generated_at']}. Mes {summary['mes']}. "
+        f"Limiar de confianca **{summary['limiar']}** (escolhido no mes de validacao para precisao >= "
+        f"{int(100 * summary['precisao_alvo_validacao'])}% do top-1)."
+    )
     L.append("")
     L.append("## Numeros")
     L.append("")
     L.append(f"- Itens avaliados: **{summary['itens']:,}**.".replace(",", "."))
-    L.append(f"- Predicao diverge do NCM declarado: {summary['divergem_do_declarado']:,} ({summary['pct_divergem']}%). "
-             "Divergir nao e alerta: a maior parte e incerteza do modelo.".replace(",", "."))
-    L.append(f"- **Alertas** (divergencia com confianca >= limiar): **{summary['alertas_confiantes']:,}** "
-             f"({summary['pct_alertas']}% dos itens), em {summary['alertas_descricoes_unicas']:,} descricoes distintas, "
-             f"somando R$ {summary['valor_total_itens_em_alerta']:,.2f}.".replace(",", "X").replace(".", ",").replace("X", "."))
-    L.append(f"- Alertas em que o modelo troca o capitulo (2 digitos): {summary['alertas_trocam_de_capitulo']:,} "
-             f"(troca de capitulo costuma ser erro grosseiro de um dos lados).".replace(",", "."))
-    L.append(f"- Alertas cuja descricao identica ja aparecia no treino com outro NCM: "
-             f"{summary['alertas_com_descricao_vista_no_treino']:,} (inconsistencia entre fornecedores).".replace(",", "."))
+    L.append(
+        f"- Predicao diverge do NCM declarado: {summary['divergem_do_declarado']:,} ({summary['pct_divergem']}%). "
+        "Divergir nao e alerta: a maior parte e incerteza do modelo.".replace(",", ".")
+    )
+    L.append(
+        f"- **Alertas** (divergencia com confianca >= limiar): **{summary['alertas_confiantes']:,}** "
+        f"({summary['pct_alertas']}% dos itens), em {summary['alertas_descricoes_unicas']:,} descricoes distintas, "
+        f"somando R$ {summary['valor_total_itens_em_alerta']:,.2f}.".replace(",", "X")
+        .replace(".", ",")
+        .replace("X", ".")
+    )
+    L.append(
+        f"- Alertas em que o modelo troca o capitulo (2 digitos): {summary['alertas_trocam_de_capitulo']:,} "
+        f"(troca de capitulo costuma ser erro grosseiro de um dos lados).".replace(",", ".")
+    )
+    L.append(
+        f"- Alertas cuja descricao identica ja aparecia no treino com outro NCM: "
+        f"{summary['alertas_com_descricao_vista_no_treino']:,} (inconsistencia entre fornecedores).".replace(",", ".")
+    )
     L.append("")
     L.append("## Alertas por capitulo declarado (15 maiores)")
     L.append("")
     L.append("| Capitulo | Alertas | Valor (R$) |")
     L.append("|---|---:|---:|")
     for cap, row in by_cap.iterrows():
-        L.append(f"| {cap} | {int(row['n']):,} | {row['valor']:,.2f} |".replace(",", "X").replace(".", ",").replace("X", "."))
+        L.append(
+            f"| {cap} | {int(row['n']):,} | {row['valor']:,.2f} |".replace(",", "X").replace(".", ",").replace("X", ".")
+        )
     L.append("")
     L.append("## Pares declarado -> previsto mais frequentes")
     L.append("")
     L.append("| Declarado | Previsto | Alertas | Valor (R$) | Exemplo |")
     L.append("|---|---|---:|---:|---|")
     for _, r in pairs.iterrows():
-        L.append(f"| {r['ncm_codigo']} {(ncm_names.get(r['ncm_codigo']) or '')[:35]} | "
-                 f"{r['ncm_previsto']} {(ncm_names.get(r['ncm_previsto']) or '')[:35]} | {int(r['n'])} | "
-                 f"{r['valor']:,.2f} | {str(r['exemplo'])[:50]} |".replace(",", "X").replace(".", ",").replace("X", "."))
+        L.append(
+            f"| {r['ncm_codigo']} {(ncm_names.get(r['ncm_codigo']) or '')[:35]} | "
+            f"{r['ncm_previsto']} {(ncm_names.get(r['ncm_previsto']) or '')[:35]} | {int(r['n'])} | "
+            f"{r['valor']:,.2f} | {str(r['exemplo'])[:50]} |".replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
     L.append("")
     L.append(f"## Amostra aleatoria para inspecao manual ({len(sample)} alertas)")
     L.append("")
@@ -151,9 +196,13 @@ def _write_report(summary, by_cap, pairs, sample, ncm_names) -> None:
     L.append("| # | Descricao | NCM declarado | NCM previsto | Conf. | Valor (R$) |")
     L.append("|---:|---|---|---|---:|---:|")
     for _, r in sample.iterrows():
-        L.append(f"| {r['n']} | {str(r['descricao_produto'])[:70]} | {r['ncm_codigo']} {r['ncm_declarado_desc'][:40]} | "
-                 f"{r['ncm_previsto']} {r['ncm_previsto_desc'][:40]} | {r['confianca']:.3f} | {r['valor_total']:,.2f} |"
-                 .replace(",", "X").replace(".", ",").replace("X", "."))
+        L.append(
+            f"| {r['n']} | {str(r['descricao_produto'])[:70]} | {r['ncm_codigo']} {r['ncm_declarado_desc'][:40]} | "
+            f"{r['ncm_previsto']} {r['ncm_previsto_desc'][:40]} | {r['confianca']:.3f} | "
+            f"{r['valor_total']:,.2f} |".replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
     L.append("")
     AUDIT_REPORT.parent.mkdir(parents=True, exist_ok=True)
     AUDIT_REPORT.write_text("\n".join(L))

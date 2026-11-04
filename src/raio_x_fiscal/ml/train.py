@@ -147,8 +147,12 @@ def train_and_evaluate(paths: Paths, sample: int | None = None) -> dict:
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "sample": sample,
         "splits": splits,
-        "features": {"n_features": feat.n_features, "word_vocab": len(feat.word.vocabulary_),
-                     "char_vocab": len(feat.char.vocabulary_), "fit_seconds": round(feat_seconds, 1)},
+        "features": {
+            "n_features": feat.n_features,
+            "word_vocab": len(feat.word.vocabulary_),
+            "char_vocab": len(feat.char.vocabulary_),
+            "fit_seconds": round(feat_seconds, 1),
+        },
         "model": model.describe(),
         "temperatures": temps,
         "audit": {"target_precision": AUDIT_TARGET_PRECISION, "threshold": threshold},
@@ -176,16 +180,18 @@ def _error_examples(test, pt, y_test, idx, ncm_names, n: int) -> pd.DataFrame:
     pick = rng.choice(wrong, size=min(n, len(wrong)), replace=False) if len(wrong) else wrong
     rows = []
     for i in pick:
-        rows.append({
-            "descricao": test["descricao_produto"].iat[i],
-            "ncm_declarado": y_test[i],
-            "ncm_declarado_desc": ncm_names.get(y_test[i]) or "",
-            "ncm_previsto": pt["ncm_topk"][i, 0],
-            "ncm_previsto_desc": ncm_names.get(pt["ncm_topk"][i, 0]) or "",
-            "confianca": round(float(pt["ncm_prob"][i, 0]), 3),
-            "declarado_no_top5": bool((pt["ncm_topk"][i] == y_test[i]).any()),
-            "mesmo_capitulo": y_test[i][:2] == pt["ncm_topk"][i, 0][:2],
-        })
+        rows.append(
+            {
+                "descricao": test["descricao_produto"].iat[i],
+                "ncm_declarado": y_test[i],
+                "ncm_declarado_desc": ncm_names.get(y_test[i]) or "",
+                "ncm_previsto": pt["ncm_topk"][i, 0],
+                "ncm_previsto_desc": ncm_names.get(pt["ncm_topk"][i, 0]) or "",
+                "confianca": round(float(pt["ncm_prob"][i, 0]), 3),
+                "declarado_no_top5": bool((pt["ncm_topk"][i] == y_test[i]).any()),
+                "mesmo_capitulo": y_test[i][:2] == pt["ncm_topk"][i, 0][:2],
+            }
+        )
     return pd.DataFrame(rows).sort_values("confianca", ascending=False).reset_index(drop=True)
 
 
@@ -193,34 +199,54 @@ def _fmt(x: float) -> str:
     return f"{100 * x:.1f}%"
 
 
-def _write_report(meta, calib, chapter_report, chapter_confusions, ncm_confusions, errors, cap_names, ncm_names) -> None:
+def _write_report(
+    meta, calib, chapter_report, chapter_confusions, ncm_confusions, errors, cap_names, ncm_names
+) -> None:
     r = meta["test_results"]
     s = meta["splits"]
     L = []
     L.append("# Resultados do baseline: descricao -> NCM")
     L.append("")
-    L.append(f"Gerado em {meta['generated_at']}. Treino: {', '.join(s['train_months'])}. "
-             f"Validacao (calibracao): {s['valid_month']}. Teste: {s['test_month']}."
-             + (f" **Amostra de {meta['sample']} linhas (depuracao).**" if meta["sample"] else ""))
+    L.append(
+        f"Gerado em {meta['generated_at']}. Treino: {', '.join(s['train_months'])}. "
+        f"Validacao (calibracao): {s['valid_month']}. Teste: {s['test_month']}."
+        + (f" **Amostra de {meta['sample']} linhas (depuracao).**" if meta["sample"] else "")
+    )
     L.append("")
     L.append("## Dados")
     L.append("")
     tr, te = s["train"], s["test"]
-    L.append(f"- Treino: **{tr['descricoes_unicas']:,}** descricoes unicas (de {tr['itens_originais']:,} itens), "
-             f"{tr['ncm_distintos']:,} NCMs, {tr['capitulos_distintos']} capitulos.".replace(",", "."))
-    L.append(f"- Ruido de rotulo no treino: {tr['pct_descricoes_com_mais_de_um_ncm']}% das descricoes aparecem com mais de um NCM, "
-             f"e elas concentram {tr['pct_itens_com_descricao_ambigua']}% dos itens (pureza media do rotulo {tr['pureza_media_do_rotulo']}).")
-    L.append(f"- Teste: **{te['itens']:,}** itens, {te['descricoes_unicas']:,} descricoes unicas; {te['pct_itens_vistos']}% dos itens "
-             f"tem descricao identica a alguma do treino e {te['descricoes_unicas_nao_vistas']:,} descricoes unicas nunca foram vistas.".replace(",", "."))
-    L.append(f"- Entre os itens vistos, a mesma descricao recebeu o mesmo NCM do treino em {te['pct_vistos_em_que_lookup_acerta']}% dos casos "
-             "(o resto e inconsistencia de classificacao entre fornecedores, nao erro do modelo).")
+    L.append(
+        f"- Treino: **{tr['descricoes_unicas']:,}** descricoes unicas (de {tr['itens_originais']:,} itens), "
+        f"{tr['ncm_distintos']:,} NCMs, {tr['capitulos_distintos']} capitulos.".replace(",", ".")
+    )
+    L.append(
+        f"- Ruido de rotulo no treino: {tr['pct_descricoes_com_mais_de_um_ncm']}% das descricoes aparecem "
+        f"com mais de um NCM, e elas concentram {tr['pct_itens_com_descricao_ambigua']}% dos itens "
+        f"(pureza media do rotulo {tr['pureza_media_do_rotulo']})."
+    )
+    L.append(
+        f"- Teste: **{te['itens']:,}** itens, {te['descricoes_unicas']:,} descricoes unicas; "
+        f"{te['pct_itens_vistos']}% dos itens tem descricao identica a alguma do treino e "
+        f"{te['descricoes_unicas_nao_vistas']:,} descricoes unicas nunca foram vistas.".replace(",", ".")
+    )
+    L.append(
+        f"- Entre os itens vistos, a mesma descricao recebeu o mesmo NCM do treino em "
+        f"{te['pct_vistos_em_que_lookup_acerta']}% dos casos "
+        "(o resto e inconsistencia de classificacao entre fornecedores, nao erro do modelo)."
+    )
     L.append("")
     L.append("## Tabela principal (mes de teste)")
     L.append("")
-    L.append("Top-1 / Top-5 / F1 macro / F1 ponderado. `todos` = como em producao (com repeticao); "
-             "`nao_vistos_unicos` = descricoes nunca vistas, sem repeticao (numero honesto de generalizacao).")
+    L.append(
+        "Top-1 / Top-5 / F1 macro / F1 ponderado. `todos` = como em producao (com repeticao); "
+        "`nao_vistos_unicos` = descricoes nunca vistas, sem repeticao (numero honesto de generalizacao)."
+    )
     L.append("")
-    for task, label in (("capitulo", "Capitulo (2 digitos, 96 classes)"), ("ncm", "NCM completo (8 digitos)")):
+    for task, label in (
+        ("capitulo", "Capitulo (2 digitos, 96 classes)"),
+        ("ncm", "NCM completo (8 digitos)"),
+    ):
         L.append(f"### {label}")
         L.append("")
         L.append("| Modelo | Subconjunto | n | Top-1 | Top-5 | F1 macro | F1 pond. |")
@@ -228,40 +254,61 @@ def _write_report(meta, calib, chapter_report, chapter_confusions, ncm_confusion
         for mname, subs in r.items():
             for sname, m in subs.items():
                 mm = m[task]
-                L.append(f"| {mname} | {sname} | {mm['n']:,} | {_fmt(mm['top1'])} | {_fmt(mm['top5'])} | "
-                         f"{_fmt(mm['f1_macro'])} | {_fmt(mm['f1_weighted'])} |".replace(",", "."))
+                L.append(
+                    f"| {mname} | {sname} | {mm['n']:,} | {_fmt(mm['top1'])} | {_fmt(mm['top5'])} | "
+                    f"{_fmt(mm['f1_macro'])} | {_fmt(mm['f1_weighted'])} |".replace(",", ".")
+                )
         L.append("")
     L.append("## Modelo e custo")
     L.append("")
     md, ft, lat = meta["model"], meta["features"], meta["latency"]
-    L.append(f"- Features: TF-IDF palavra (1-2 gramas, {ft['word_vocab']:,} termos) + caractere (3-5, {ft['char_vocab']:,} termos) "
-             f"= {ft['n_features']:,} dimensoes, float32, ajustadas em {ft['fit_seconds']}s.".replace(",", "."))
-    L.append(f"- Modelo: LinearSVC do capitulo ({md['capitulos']} classes) + {md['sub_modelos']} LinearSVC por capitulo "
-             f"({md['ncm_classes']:,} NCMs no total, {md['coeficientes']:,} coeficientes float32). "
-             f"Treino: {md['fit_seconds']}.".replace(",", "."))
-    L.append(f"- Calibracao por temperatura no mes de validacao: T_capitulo = {md['t_chapter']:.3f}, T_ncm = {md['t_ncm']:.3f}.")
-    L.append(f"- Latencia de inferencia (CPU, 2 nucleos, inclui vetorizacao ja feita): item unico p50 {lat['single_p50_ms']} ms, "
-             f"p95 {lat['single_p95_ms']} ms; em lote de {lat['batch_size']}: {lat['batch_ms_per_item']} ms/item. "
-             f"Mes de teste inteiro previsto em {meta['predict_seconds_test']}s.")
+    L.append(
+        f"- Features: TF-IDF palavra (1-2 gramas, {ft['word_vocab']:,} termos) + "
+        f"caractere (3-5, {ft['char_vocab']:,} termos) "
+        f"= {ft['n_features']:,} dimensoes, float32, ajustadas em {ft['fit_seconds']}s.".replace(",", ".")
+    )
+    L.append(
+        f"- Modelo: LinearSVC do capitulo ({md['capitulos']} classes) + {md['sub_modelos']} LinearSVC por capitulo "
+        f"({md['ncm_classes']:,} NCMs no total, {md['coeficientes']:,} coeficientes float32). "
+        f"Treino: {md['fit_seconds']}.".replace(",", ".")
+    )
+    L.append(
+        f"- Calibracao por temperatura no mes de validacao: T_capitulo = {md['t_chapter']:.3f}, "
+        f"T_ncm = {md['t_ncm']:.3f}."
+    )
+    L.append(
+        f"- Latencia de inferencia (CPU, 2 nucleos, inclui vetorizacao ja feita): "
+        f"item unico p50 {lat['single_p50_ms']} ms, "
+        f"p95 {lat['single_p95_ms']} ms; em lote de {lat['batch_size']}: {lat['batch_ms_per_item']} ms/item. "
+        f"Mes de teste inteiro previsto em {meta['predict_seconds_test']}s."
+    )
     L.append(f"- Artefatos em `models/` ({meta['model_bytes'] / 1e6:.0f} MB, fora do git).")
     L.append("")
     L.append("## Calibracao (mes de validacao) e limiar da auditoria")
     L.append("")
-    L.append("Acuracia do top-1 por faixa de confianca P(ncm) e precisao acumulada acima de cada faixa. "
-             f"Limiar escolhido para a auditoria (precisao >= {int(100 * meta['audit']['target_precision'])}%): "
-             f"**{meta['audit']['threshold']}**.")
+    L.append(
+        "Acuracia do top-1 por faixa de confianca P(ncm) e precisao acumulada acima de cada faixa. "
+        f"Limiar escolhido para a auditoria (precisao >= {int(100 * meta['audit']['target_precision'])}%): "
+        f"**{meta['audit']['threshold']}**."
+    )
     L.append("")
     L.append("| Faixa | n | Acuracia na faixa | n acima | Precisao acima |")
     L.append("|---|---:|---:|---:|---:|")
     for _, row in calib.iterrows():
-        L.append(f"| {row['faixa']} | {row['n']:,} | {row['acuracia_na_faixa']} | {row['n_acima']:,} | {row['precisao_acima']} |".replace(",", "."))
+        L.append(
+            f"| {row['faixa']} | {row['n']:,} | {row['acuracia_na_faixa']} | {row['n_acima']:,} | "
+            f"{row['precisao_acima']} |".replace(",", ".")
+        )
     L.append("")
     L.append("## Por capitulo (descricoes nao vistas, unicas; 20 maiores)")
     L.append("")
     L.append("| Capitulo | Descricao | Precisao | Recall | F1 | Suporte |")
     L.append("|---|---|---:|---:|---:|---:|")
     for _, row in chapter_report.head(20).iterrows():
-        L.append(f"| {row['classe']} | {row['nome'][:60]} | {row['precisao']} | {row['recall']} | {row['f1']} | {row['suporte']:,} |".replace(",", "."))
+        L.append(
+            f"| {row['classe']} | {row['nome'][:60]} | {row['precisao']} | {row['recall']} | {row['f1']} | "
+            f"{row['suporte']:,} |".replace(",", ".")
+        )
     L.append("")
     L.append("## Capitulos mais confundidos (verdadeiro -> previsto)")
     L.append("")
@@ -282,9 +329,11 @@ def _write_report(meta, calib, chapter_report, chapter_confusions, ncm_confusion
     L.append("| Descricao | NCM declarado | NCM previsto | Conf. | Declarado no top-5 | Mesmo cap. |")
     L.append("|---|---|---|---:|---|---|")
     for _, e in errors.iterrows():
-        L.append(f"| {str(e['descricao'])[:70]} | {e['ncm_declarado']} {str(e['ncm_declarado_desc'])[:40]} | "
-                 f"{e['ncm_previsto']} {str(e['ncm_previsto_desc'])[:40]} | {e['confianca']} | "
-                 f"{'sim' if e['declarado_no_top5'] else 'nao'} | {'sim' if e['mesmo_capitulo'] else 'nao'} |")
+        L.append(
+            f"| {str(e['descricao'])[:70]} | {e['ncm_declarado']} {str(e['ncm_declarado_desc'])[:40]} | "
+            f"{e['ncm_previsto']} {str(e['ncm_previsto_desc'])[:40]} | {e['confianca']} | "
+            f"{'sim' if e['declarado_no_top5'] else 'nao'} | {'sim' if e['mesmo_capitulo'] else 'nao'} |"
+        )
     L.append("")
     ML_REPORT.parent.mkdir(parents=True, exist_ok=True)
     ML_REPORT.write_text("\n".join(L))

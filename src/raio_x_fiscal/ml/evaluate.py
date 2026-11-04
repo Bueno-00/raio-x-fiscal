@@ -42,8 +42,16 @@ def per_class_report(y_true: np.ndarray, y_pred: np.ndarray, names: dict[str, st
         p = tp / (tp + fp) if tp + fp else 0.0
         r = tp / support
         f1 = 2 * p * r / (p + r) if p + r else 0.0
-        rows.append({"classe": c, "nome": (names or {}).get(c) or "", "precisao": round(p, 3),
-                     "recall": round(r, 3), "f1": round(f1, 3), "suporte": support})
+        rows.append(
+            {
+                "classe": c,
+                "nome": (names or {}).get(c) or "",
+                "precisao": round(p, 3),
+                "recall": round(r, 3),
+                "f1": round(f1, 3),
+                "suporte": support,
+            }
+        )
     return pd.DataFrame(rows).sort_values("suporte", ascending=False).reset_index(drop=True)
 
 
@@ -80,13 +88,15 @@ def confidence_table(prob: np.ndarray, correct: np.ndarray, edges: list[float]) 
     for lo, hi in zip(edges[:-1], edges[1:], strict=True):
         m = (prob >= lo) & (prob < hi)
         above = prob >= lo
-        rows.append({
-            "faixa": f"[{lo:.2f}, {hi:.2f})",
-            "n": int(m.sum()),
-            "acuracia_na_faixa": round(float(correct[m].mean()), 4) if m.any() else None,
-            "n_acima": int(above.sum()),
-            "precisao_acima": round(float(correct[above].mean()), 4) if above.any() else None,
-        })
+        rows.append(
+            {
+                "faixa": f"[{lo:.2f}, {hi:.2f})",
+                "n": int(m.sum()),
+                "acuracia_na_faixa": round(float(correct[m].mean()), 4) if m.any() else None,
+                "n_acima": int(above.sum()),
+                "precisao_acima": round(float(correct[above].mean()), 4) if above.any() else None,
+            }
+        )
     return pd.DataFrame(rows)
 
 

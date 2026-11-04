@@ -222,9 +222,7 @@ def _build_entity(
     return manifest
 
 
-def build_month(
-    month: str, paths: Paths, con: duckdb.DuckDBPyConnection | None = None
-) -> dict[str, dict]:
+def build_month(month: str, paths: Paths, con: duckdb.DuckDBPyConnection | None = None) -> dict[str, dict]:
     """Bronze partitions of one month -> silver nota/item/evento (+ rejects)."""
     validate_month(month)
     own_con = con is None
@@ -242,12 +240,23 @@ def build_month(
                 m = _build_entity(con, entity, month, paths, item_sql(src, month), ITEM_REJECTS, ITEM_KEY)
             else:
                 m = _build_entity(
-                    con, entity, month, paths, evento_sql(src, month), NOTA_REJECTS[:2], ["chave_acesso", "data_hora_evento"]
+                    con,
+                    entity,
+                    month,
+                    paths,
+                    evento_sql(src, month),
+                    NOTA_REJECTS[:2],
+                    ["chave_acesso", "data_hora_evento"],
                 )
             manifests[entity] = m
             log.info(
                 "silver %s/%s: %d -> %d (rejeitadas %d, duplicadas %d)",
-                month, entity, m["rows_in"], m["rows_out"], m["rejected"], m["duplicates_removed"],
+                month,
+                entity,
+                m["rows_in"],
+                m["rows_out"],
+                m["rejected"],
+                m["duplicates_removed"],
             )
     finally:
         if own_con:

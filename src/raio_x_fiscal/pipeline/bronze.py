@@ -104,9 +104,7 @@ def ingest_month(
     return manifests
 
 
-def _write_partition(
-    con: duckdb.DuckDBPyConnection, entity: str, month: str, csv_path: Path, paths: Paths
-) -> dict:
+def _write_partition(con: duckdb.DuckDBPyConnection, entity: str, month: str, csv_path: Path, paths: Paths) -> dict:
     part_dir = paths.partition("bronze", entity, month)
     if part_dir.exists():
         shutil.rmtree(part_dir)  # idempotent: the month is rebuilt from scratch
