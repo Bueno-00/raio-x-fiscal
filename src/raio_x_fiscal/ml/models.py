@@ -1,62 +1,36 @@
-"""Baselines for descricao -> NCM.
+"""Baselines for descricao -> NCM, built to fit an 8 GB box shared with production.
 
 - MajorityBaseline: always the most frequent class (the floor).
 - LookupBaseline: exact match of the normalised description seen in training (memorisation;
   shows how much of the 'as deployed' accuracy is just repetition).
-- HierarchicalLinearNCM: TF-IDF + LinearSVC for the chapter (2 digits), then one LinearSVC per
-  chapter for the full 8-digit code. A flat linear model over ~6.5k classes x 400k features
-  would need ~20 GB of dense coefficients; the hierarchy keeps it at sum(k_c x F_c), each
-  sub-model restricted to the feature columns that occur in its chapter. Scores are turned into
-  probabilities by temperature scaling fitted on the validation month (never on test), and the
-  joint P(ncm) = P(capitulo) x P(ncm | capitulo) is used for top-k and for the audit confidence.
+- HierarchicalLinearNCM: TF-IDF + linear SVM for the chapter (2 digits), then one linear SVM per
+  chapter for the full 8-digit code. A flat linear model over ~6.6k classes x 400k features
+  would need ~20 GB of dense coefficients. The hierarchy reduces that to sum(k_c x F_c), and the
+  per-chapter heads are stored as pruned sparse float32 matrices (weights below a relative
+  threshold are dropped; the agreement with the dense head is measured on the chapter's own
+  training rows and reported). Scores become probabilities by temperature scaling fitted on the
+  validation month, and P(ncm) = P(capitulo) x P(ncm | capitulo) drives top-k and the audit
+  confidence.
+
+Training lives in `ml/fit.py` (resumable, checkpointed); this module holds what inference needs.
 """
 
 from __future__ import annotations
 
-import logging
-import time
-import warnings
 from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
 import scipy.sparse as sp
-from sklearn.svm import LinearSVC
-
-log = logging.getLogger(__name__)
-
-# Many chapters have more NCM classes than unique descriptions; sklearn's heuristic warning does
-# not apply (the labels are categorical codes).
-warnings.filterwarnings("ignore", message="The number of unique classes is greater than 50%")
 
 TEMPERATURE_GRID = np.logspace(-1.0, 1.3, 36)
 
 
 def softmax(scores: np.ndarray, temperature: float = 1.0) -> np.ndarray:
-    z = scores / temperature
+    z = scores.astype(np.float32) / np.float32(temperature)
     z = z - z.max(axis=1, keepdims=True)
     e = np.exp(z)
     return e / e.sum(axis=1, keepdims=True)
-
-
-def _as_2d_scores(clf: LinearSVC, X: sp.csr_matrix) -> np.ndarray:
-    """decision_function returns 1-D for binary problems; make it (n, 2) like multiclass."""
-    s = clf.decision_function(X)
-    if s.ndim == 1:
-        s = np.column_stack([-s, s])
-    return s
-
-
-def fit_temperature(scores: np.ndarray, true_idx: np.ndarray) -> float:
-    """Single-scalar temperature minimising NLL (Guo et al., 2017). Vectorised grid search."""
-    best_t, best_nll = 1.0, np.inf
-    rows = np.arange(len(true_idx))
-    for t in TEMPERATURE_GRID:
-        p = softmax(scores, t)[rows, true_idx]
-        nll = -np.log(np.clip(p, 1e-12, 1.0)).mean()
-        if nll < best_nll:
-            best_t, best_nll = float(t), float(nll)
-    return best_t
 
 
 def chapter_of(codes: np.ndarray) -> np.ndarray:
@@ -85,96 +59,100 @@ class LookupBaseline:
 
 
 @dataclass
+class LinearHead:
+    """One-vs-rest linear scores: decision(X) = X @ W.T + b, W dense or sparse float32 (k, F)."""
+
+    classes: np.ndarray
+    W: np.ndarray | sp.csr_matrix
+    b: np.ndarray
+
+    def decision(self, X: sp.csr_matrix) -> np.ndarray:
+        s = (X @ self.W.T).toarray() if sp.issparse(self.W) else X @ self.W.T
+        return np.asarray(s, dtype=np.float32) + self.b.astype(np.float32)
+
+    @property
+    def n_coef(self) -> int:
+        return int(self.W.nnz) if sp.issparse(self.W) else int(self.W.size)
+
+    @property
+    def n_classes(self) -> int:
+        return int(len(self.classes))
+
+
+class TemperatureFitter:
+    """Accumulates NLL over a grid of temperatures, chunk by chunk (no giant score matrix)."""
+
+    def __init__(self, grid: np.ndarray = TEMPERATURE_GRID):
+        self.grid = grid
+        self.nll = np.zeros(len(grid), dtype=np.float64)
+        self.n = 0
+
+    def add(self, scores: np.ndarray, true_idx: np.ndarray) -> None:
+        if len(true_idx) == 0:
+            return
+        rows = np.arange(len(true_idx))
+        for i, t in enumerate(self.grid):
+            p = softmax(scores, t)[rows, true_idx]
+            self.nll[i] -= np.log(np.clip(p, 1e-12, 1.0)).sum()
+        self.n += len(true_idx)
+
+    def best(self) -> float:
+        return float(self.grid[int(np.argmin(self.nll))]) if self.n else 1.0
+
+
+def fit_temperature(scores: np.ndarray, true_idx: np.ndarray) -> float:
+    """Single-scalar temperature minimising NLL (Guo et al., 2017)."""
+    f = TemperatureFitter()
+    f.add(scores, true_idx)
+    return f.best()
+
+
+@dataclass
 class HierarchicalLinearNCM:
-    C: float = 1.0
-    top_chapters: int = 3
-    max_iter: int = 2000
-    chapter_clf: LinearSVC = field(init=False, repr=False)
-    sub: dict[str, tuple[np.ndarray | None, LinearSVC | None, np.ndarray]] = field(
-        init=False, default_factory=dict, repr=False
-    )
+    chapter: LinearHead
+    sub: dict[str, LinearHead] = field(default_factory=dict)  # chapters with >= 2 NCMs
+    single: dict[str, str] = field(default_factory=dict)  # chapters with exactly 1 NCM
     t_chapter: float = 1.0
     t_ncm: float = 1.0
-    fit_seconds_: dict[str, float] = field(init=False, default_factory=dict)
-
-    # ---------------------------------------------------------------- training
-    def fit(
-        self, X: sp.csr_matrix, y_ncm: np.ndarray, sample_weight: np.ndarray | None = None
-    ) -> HierarchicalLinearNCM:
-        y_cap = chapter_of(y_ncm)
-        t0 = time.perf_counter()
-        self.chapter_clf = LinearSVC(C=self.C, dual="auto", max_iter=self.max_iter, tol=1e-3)
-        self.chapter_clf.fit(X, y_cap, sample_weight=sample_weight)
-        self.chapter_clf.coef_ = self.chapter_clf.coef_.astype(np.float32)
-        self.fit_seconds_["chapter"] = time.perf_counter() - t0
-        log.info("capitulo: %d classes em %.0fs", len(self.chapter_clf.classes_), self.fit_seconds_["chapter"])
-
-        t0 = time.perf_counter()
-        X = X.tocsr()
-        for cap in self.chapter_clf.classes_:
-            rows = np.flatnonzero(y_cap == cap)
-            labels = y_ncm[rows]
-            classes = np.unique(labels)
-            if len(classes) == 1:
-                self.sub[cap] = (None, None, classes)
-                continue
-            Xc = X[rows]
-            cols = np.unique(Xc.indices)
-            Xc = Xc[:, cols]
-            clf = LinearSVC(C=self.C, dual="auto", max_iter=self.max_iter, tol=1e-3)
-            sw = None if sample_weight is None else sample_weight[rows]
-            clf.fit(Xc, labels, sample_weight=sw)
-            clf.coef_ = clf.coef_.astype(np.float32)
-            self.sub[cap] = (cols.astype(np.int32), clf, clf.classes_)
-        self.fit_seconds_["ncm"] = time.perf_counter() - t0
-        n_models = sum(1 for v in self.sub.values() if v[1] is not None)
-        log.info("ncm: %d sub-modelos em %.0fs", n_models, self.fit_seconds_["ncm"])
-        return self
+    top_chapters: int = 3
+    meta: dict = field(default_factory=dict)
 
     # ---------------------------------------------------------------- calibration
     def calibrate(self, X: sp.csr_matrix, y_ncm: np.ndarray) -> dict[str, float]:
-        """Fit the two temperatures on a held-out month (validation), not on test."""
-        y_cap = chapter_of(y_ncm)
-        classes = list(self.chapter_clf.classes_)
-        idx = {c: i for i, c in enumerate(classes)}
-        keep = np.array([c in idx for c in y_cap])
-        scores = self.chapter_clf.decision_function(X[keep])
-        self.t_chapter = fit_temperature(scores, np.array([idx[c] for c in y_cap[keep]]))
+        """In-memory convenience (tests / small data); the staged trainer does this per chunk."""
+        fc, fn = TemperatureFitter(), TemperatureFitter()
+        self.accumulate_calibration(X, y_ncm, fc, fn)
+        self.t_chapter, self.t_ncm = fc.best(), fn.best()
+        return {"t_chapter": self.t_chapter, "t_ncm": self.t_ncm}
 
-        all_scores, all_idx = [], []
-        for cap, (cols, clf, cls) in self.sub.items():
-            if clf is None:
-                continue
+    def accumulate_calibration(
+        self, X: sp.csr_matrix, y_ncm: np.ndarray, fit_cap: TemperatureFitter, fit_ncm: TemperatureFitter
+    ) -> None:
+        y_cap = chapter_of(y_ncm)
+        idx = {c: i for i, c in enumerate(self.chapter.classes)}
+        keep = np.array([c in idx for c in y_cap], dtype=bool)
+        if keep.any():
+            fit_cap.add(self.chapter.decision(X[keep]), np.array([idx[c] for c in y_cap[keep]]))
+        for cap, head in self.sub.items():
             rows = np.flatnonzero(y_cap == cap)
             if len(rows) == 0:
                 continue
-            cidx = {c: i for i, c in enumerate(cls)}
-            known = np.array([y in cidx for y in y_ncm[rows]])
+            cidx = {c: i for i, c in enumerate(head.classes)}
+            known = np.array([y in cidx for y in y_ncm[rows]], dtype=bool)
             rows = rows[known]
             if len(rows) == 0:
                 continue
-            s = _as_2d_scores(clf, X[rows][:, cols])
-            # pad to a common width so one grid search covers every chapter
-            all_scores.append(s)
-            all_idx.append(np.array([cidx[y] for y in y_ncm[rows]]))
-        width = max(s.shape[1] for s in all_scores)
-        padded = np.full((sum(len(s) for s in all_scores), width), -1e4, dtype=np.float32)
-        pos = 0
-        for s in all_scores:
-            padded[pos : pos + len(s), : s.shape[1]] = s
-            pos += len(s)
-        self.t_ncm = fit_temperature(padded, np.concatenate(all_idx))
-        return {"t_chapter": self.t_chapter, "t_ncm": self.t_ncm}
+            fit_ncm.add(head.decision(X[rows]), np.array([cidx[y] for y in y_ncm[rows]]))
 
     # ---------------------------------------------------------------- inference
     def chapter_proba(self, X: sp.csr_matrix) -> np.ndarray:
-        return softmax(self.chapter_clf.decision_function(X), self.t_chapter)
+        return softmax(self.chapter.decision(X), self.t_chapter)
 
     def predict_topk(self, X: sp.csr_matrix, k: int = 5) -> dict[str, np.ndarray]:
         """Top-k chapters and top-k NCMs with calibrated joint probabilities."""
         X = X.tocsr()
         n = X.shape[0]
-        classes = self.chapter_clf.classes_
+        classes = self.chapter.classes
         p_cap = self.chapter_proba(X)
         order = np.argsort(-p_cap, axis=1)
         cap_topk = classes[order[:, :k]]
@@ -187,17 +165,16 @@ class HierarchicalLinearNCM:
             cap = classes[ci]
             rows = np.flatnonzero((cand == ci).any(axis=1))
             pc = p_cap[rows, ci]
-            cols, clf, cls = self.sub[cap]
-            if clf is None:
-                joint = pc[:, None]
-                labels = np.tile(cls, (len(rows), 1))
-            else:
-                s = _as_2d_scores(clf, X[rows][:, cols])
-                joint = softmax(s, self.t_ncm) * pc[:, None]
+            if cap in self.sub:
+                head = self.sub[cap]
+                joint = softmax(head.decision(X[rows]), self.t_ncm) * pc[:, None]
                 kk = min(k, joint.shape[1])
                 part = np.argpartition(-joint, kk - 1, axis=1)[:, :kk]
                 joint = np.take_along_axis(joint, part, axis=1)
-                labels = cls[part]
+                labels = head.classes[part]
+            else:
+                joint = pc[:, None]
+                labels = np.full((len(rows), 1), self.single[cap], dtype=object)
             merged_p = np.concatenate([best_prob[rows], joint.astype(np.float32)], axis=1)
             merged_l = np.concatenate([best_ncm[rows], labels.astype(object)], axis=1)
             o = np.argsort(-merged_p, axis=1)[:, :k]
@@ -211,18 +188,16 @@ class HierarchicalLinearNCM:
         }
 
     def describe(self) -> dict:
-        n_sub = sum(1 for v in self.sub.values() if v[1] is not None)
-        params = int(self.chapter_clf.coef_.size) + sum(
-            int(v[1].coef_.size) for v in self.sub.values() if v[1] is not None
-        )
         return {
-            "capitulos": int(len(self.chapter_clf.classes_)),
-            "sub_modelos": n_sub,
-            "ncm_classes": int(sum(len(v[2]) for v in self.sub.values())),
-            "coeficientes": params,
+            "capitulos": self.chapter.n_classes,
+            "sub_modelos": len(self.sub),
+            "capitulos_com_um_ncm": len(self.single),
+            "ncm_classes": int(sum(h.n_classes for h in self.sub.values()) + len(self.single)),
+            "coeficientes_capitulo": self.chapter.n_coef,
+            "coeficientes_ncm_apos_poda": int(sum(h.n_coef for h in self.sub.values())),
             "t_chapter": self.t_chapter,
             "t_ncm": self.t_ncm,
-            "fit_seconds": {k: round(v, 1) for k, v in self.fit_seconds_.items()},
+            **self.meta,
         }
 
 

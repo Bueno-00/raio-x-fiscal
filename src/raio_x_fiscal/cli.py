@@ -70,8 +70,15 @@ def build_parser() -> argparse.ArgumentParser:
     ds.add_argument("--teste", default=None, help="mes de teste AAAAMM (padrao: ultimo mes)")
     ds.add_argument("--validacao", default=None, help="mes de validacao AAAAMM (padrao: penultimo)")
 
-    tr = sub.add_parser("ml-train", help="treina baselines e grava reports/ml_results.md")
+    tr = sub.add_parser("ml-train", help="treina baselines por etapas retomaveis e grava reports/ml_results.md")
     tr.add_argument("--amostra", type=int, default=None, help="limita linhas de treino (depuracao)")
+    tr.add_argument(
+        "--etapa",
+        default="tudo",
+        choices=["features", "capitulo", "ncm", "avaliar", "tudo"],
+        help="etapa a rodar (checkpoints em models/ckpt permitem retomar)",
+    )
+    tr.add_argument("--orcamento", type=float, default=None, help="segundos de orcamento da etapa (retoma depois)")
 
     au = sub.add_parser("ml-audit", help="auditoria de NCM no mes de teste")
     au.add_argument("--amostra", type=int, default=40, help="alertas para inspecao manual")
@@ -115,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "ml-train":
         from raio_x_fiscal.ml.train import train_and_evaluate
 
-        out = train_and_evaluate(paths, sample=args.amostra)
+        out = train_and_evaluate(paths, stage=args.etapa, budget_s=args.orcamento, sample=args.amostra)
     elif args.cmd == "ml-audit":
         from raio_x_fiscal.ml.audit import run_audit
 

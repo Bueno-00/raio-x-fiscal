@@ -10,13 +10,8 @@ from raio_x_fiscal.config import Paths
 from raio_x_fiscal.ml import dataset
 from raio_x_fiscal.ml.evaluate import classification_metrics, confusion_pairs, pick_threshold, topk_accuracy
 from raio_x_fiscal.ml.features import TextFeaturizer
-from raio_x_fiscal.ml.models import (
-    HierarchicalLinearNCM,
-    LookupBaseline,
-    MajorityBaseline,
-    hybrid_topk,
-    softmax,
-)
+from raio_x_fiscal.ml.fit import fit_chapter_head, fit_hierarchical, prune
+from raio_x_fiscal.ml.models import LookupBaseline, MajorityBaseline, chapter_of, hybrid_topk, softmax
 from raio_x_fiscal.ml.predict import NcmPredictor
 
 # Three chapters, five NCMs, templated descriptions with variation.
@@ -66,7 +61,7 @@ def trained():
     feat = TextFeaturizer(word_min_df=1, char_min_df=1)
     X = feat.fit_transform(train["descricao_normalizada"].tolist())
     y = train["ncm_codigo"].to_numpy(dtype=object)
-    model = HierarchicalLinearNCM(C=1.0).fit(X, y, sample_weight=np.log1p(train["n_itens"].to_numpy(float)))
+    model = fit_hierarchical(X, y, sw=np.log1p(train["n_itens"].to_numpy(np.float32)))
     valid = synthetic(15, seed=1)
     model.calibrate(feat.transform(valid["descricao_normalizada"].tolist()), valid["ncm_codigo"].to_numpy(dtype=object))
     lookup = LookupBaseline().fit(train["descricao_normalizada"].to_numpy(), y)
@@ -87,9 +82,8 @@ def test_hierarchical_model_learns_and_ranks(trained):
     assert np.all(out["ncm_prob"] > 0) and np.all(out["ncm_prob"].sum(axis=1) <= 1.0 + 1e-5)
     assert set(out["capitulo_topk"][:, 0]) <= {"10", "07", "96", "22"}
     desc = model.describe()
-    assert (
-        desc["capitulos"] == 4 and desc["ncm_classes"] == 5 and desc["sub_modelos"] == 1
-    )  # only chapter 96 has 2 NCMs
+    assert desc["capitulos"] == 4 and desc["ncm_classes"] == 5
+    assert desc["sub_modelos"] == 1 and desc["capitulos_com_um_ncm"] == 3  # only chapter 96 has 2 NCMs
 
 
 def test_softmax_and_temperature():
@@ -186,3 +180,28 @@ def test_build_splits_has_no_description_leak(tmp_path):
     assert seen == {"arroz": True, "agua": False}
     unseen = set(test.loc[~test["seen_in_train"], "descricao_normalizada"])
     assert not (unseen & set(train["descricao_normalizada"]))
+
+
+def test_prune_keeps_strong_weights_and_shape():
+    W = np.array([[1.0, 0.001, -0.5, 0.0], [0.0, 0.0, 0.0, 2.0]], dtype=np.float32)
+    P = prune(W, rel=0.1, abs_min=1e-3, cap=10)
+    assert P.shape == W.shape and P.nnz == 3
+    assert P.toarray()[0].tolist() == [1.0, 0.0, -0.5, 0.0]
+    capped = prune(np.ones((1, 50), dtype=np.float32), rel=0.0, abs_min=0.0, cap=7)
+    assert capped.nnz == 7
+
+
+def test_chapter_head_checkpoints_and_resumes(tmp_path):
+    train = synthetic(20, seed=3)
+    feat = TextFeaturizer(word_min_df=1, char_min_df=1)
+    X = feat.fit_transform(train["descricao_normalizada"].tolist())
+    y_cap = chapter_of(train["ncm_codigo"].to_numpy(dtype=object))
+    # a negative budget fits nothing and reports "not done"; checkpoints from a full run are reused
+    assert fit_chapter_head(X, y_cap, None, tmp_path, budget_s=-1) is None
+    head = fit_chapter_head(X, y_cap, None, tmp_path)
+    assert head is not None
+    assert sorted(p.name for p in tmp_path.glob("cap_*.npz")) == [f"cap_{c}.npz" for c in sorted(set(y_cap))]
+    again = fit_chapter_head(X, y_cap, None, tmp_path, budget_s=-1)  # all cached: budget irrelevant
+    assert again is not None and np.allclose(again.W, head.W)
+    scores = head.decision(X)
+    assert scores.shape == (X.shape[0], len(head.classes)) and scores.dtype == np.float32
