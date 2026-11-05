@@ -74,7 +74,15 @@ que o fornecedor declarou, nao uma verdade auditada.
 ## Baseline
 
 <!-- CARD_BASELINE_START -->
-Em processamento; ver `reports/ml_results.md`.
+TF-IDF (palavra 1-2 + caractere 3-5, 400 mil dimensoes) + LinearSVC hierarquico (capitulo, depois NCM
+dentro do capitulo), treino 2025-04 a 2025-07, teste 2025-09:
+
+| Corte do teste | Capitulo top-1 / top-5 | NCM top-1 / top-5 | NCM F1 macro |
+|---|---:|---:|---:|
+| Todos os itens (547.718) | 89,0% / 96,0% | 77,3% / 87,7% | 38,1% |
+| Descricoes unicas nao vistas (126.723) | 79,7% / 92,4% | 60,0% / 76,1% | 26,5% |
+
+Detalhes e comparacao com lookup exato e classe majoritaria em `reports/ml_results.md`.
 <!-- CARD_BASELINE_END -->
 
 ## Limitacoes e vieses

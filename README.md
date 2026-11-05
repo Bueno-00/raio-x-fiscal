@@ -25,7 +25,10 @@ uma auditoria que aponta NCMs declarados que provavelmente estao errados.
 > 98,8% a 99,2% dos itens com NCM valido. Divergencias encontradas e documentadas: soma dos itens
 > diferente do total da nota em 14% a 23% das notas por mes; orgao destinatario ausente em 83% das
 > linhas do arquivo de itens (mas presente em 98,5% das notas); 4.344 notas sem nenhum item.
-> Baseline descricao -> NCM: ver tabela em [Resultados do baseline](#resultados-do-baseline).
+> Baseline descricao -> NCM (TF-IDF + LinearSVC hierarquico, so CPU): **78,7%** de acerto no NCM de 8
+> digitos no mes de teste e **60,0% / 76,1%** (top-1 / top-5) nas descricoes nunca vistas. Auditoria de
+> NCM: 3.580 alertas no mes de teste; numa inspecao manual de 60, **50 (83%)** eram NCM declarado errado
+> com a sugestao do modelo correta, e 3 (5%) eram erro do modelo.
 <!-- RESULTS_BOX_END -->
 
 ---
@@ -186,14 +189,54 @@ Divergencias encontradas (registradas como `warn`/`info`, nao escondidas):
 <!-- ML_RESULTS_START -->
 ### Resultados do baseline
 
-Em processamento. Tabela final e analise em [reports/ml_results.md](reports/ml_results.md).
+Mes de teste 2025-09 (547.718 itens). Tabela completa (quatro subconjuntos, F1 ponderado), calibracao,
+desempenho por capitulo, confusoes e exemplos de erro em [reports/ml_results.md](reports/ml_results.md).
+
+| Tarefa | Modelo | Todos os itens: top-1 / top-5 | Nunca vistas, unicas: top-1 / top-5 | F1 macro (nunca vistas) |
+|---|---|---:|---:|---:|
+| Capitulo (2 digitos) | classe majoritaria | 7,6% / 30,7% | 5,4% / 27,8% | 0,1% |
+| Capitulo | lookup exato | 65,3% / 73,8% | 5,4% / 27,8% | 0,1% |
+| Capitulo | TF-IDF + LinearSVC | **89,0% / 96,0%** | **79,7% / 92,4%** | 60,3% |
+| Capitulo | hibrido lookup -> SVM | 89,5% / 93,9% | 79,3% / 87,8% | 59,2% |
+| NCM (8 digitos) | classe majoritaria | 5,8% / 18,1% | 4,2% / 13,5% | 0,0% |
+| NCM | lookup exato | 60,0% / 64,1% | 4,2% / 13,5% | 0,0% |
+| NCM | TF-IDF + LinearSVC hierarquico | 77,3% / 87,7% | **60,0% / 76,1%** | 26,5% |
+| NCM | hibrido lookup -> SVM | **78,7% / 87,8%** | 60,0% / 76,1% | 26,5% |
+
+O que os numeros dizem:
+
+- **Memorizar nao generaliza.** O lookup exato chega a 60% no NCM porque 68% dos itens do mes repetem uma
+  descricao do treino; nas 126.723 descricoes nunca vistas ele cai para o nivel da classe majoritaria.
+  Por isso o numero de referencia e a coluna "nunca vistas, unicas".
+- **Teto de ruido.** Nos itens cuja descricao ja estava no treino, o NCM declarado coincide com o do treino
+  em so 86,5%: parte do "erro" de qualquer modelo e erro do rotulo (a auditoria abaixo confirma isso).
+- **Cauda longa.** 6.583 NCMs no treino, muitos com poucos exemplos: F1 macro de 26,5% contra F1 ponderado
+  de 57,7% nas descricoes nunca vistas. E o ponto que a FASE 2 (encoder PT-BR) precisa melhorar.
+- **Custo.** Treino em CPU de 1 nucleo: 28 min (capitulo) + 15 min (NCM), pico de ~2,9 GB de RAM,
+  retomavel por checkpoint. Inferencia: 0,23 ms/item em lote (mes de teste inteiro em 92 s) e 150 ms
+  (p50) por item isolado. Modelo de 215 MB, podado para esparso com concordancia top-1 de 99,6% com o
+  modelo denso.
 <!-- ML_RESULTS_END -->
 
 ### Auditoria de NCM
 
 <!-- AUDIT_START -->
-Em processamento. Detalhes em [reports/ncm_audit.md](reports/ncm_audit.md) e inspecao manual em
-[reports/ncm_audit_inspection.md](reports/ncm_audit_inspection.md).
+Um alerta e um item cujo NCM declarado diverge da predicao com confianca acima do limiar. O limiar foi
+escolhido no mes de validacao. A meta era 95% de precisao, mas ela nao e alcancavel: a "precisao" ali e
+concordancia com o NCM declarado, que tem ruido. Por isso vale o limiar de maior precisao medida:
+**0,99** (92,0% em 45.234 itens).
+
+- **Mes de teste:** 3.580 alertas (0,65% dos itens), em 723 descricoes distintas, somando R$ 2,63 mi;
+  1.305 deles trocam ate o capitulo. Detalhes em [reports/ncm_audit.md](reports/ncm_audit.md).
+- **Inspecao manual de 60 alertas aleatorios**
+  ([reports/ncm_audit_inspection.md](reports/ncm_audit_inspection.md)): **50 (83%, IC 95% de 72% a 91%)**
+  sao NCM declarado errado com a sugestao do modelo correta (ex.: cenoura declarada como "cavalos",
+  farinha de trigo como "desperdicio de algodao", tomate como "outros horticolas"); 5 sao livros em codigo
+  vizinho, sem impacto tributario; 1 e ambiguo; 1 tem declarado e previsto errados; **3 (5%)** sao erro do
+  modelo.
+- **Ressalva:** 45% dos alertas sao horticolas e frutas in natura, que em geral tem tributacao federal
+  zero dos dois lados do erro. O valor somado mede volume, nao imposto recuperavel. O uso honesto e
+  priorizar a revisao humana do cadastro de produto do fornecedor, nao corrigir NCM automaticamente.
 <!-- AUDIT_END -->
 
 ## Como rodar
