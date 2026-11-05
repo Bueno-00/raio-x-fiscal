@@ -30,7 +30,9 @@ import pandas as pd
 import scipy.sparse as sp
 
 from raio_x_fiscal.config import ROOT, Paths, connect
+from raio_x_fiscal.fmt import num, pct
 from raio_x_fiscal.ml.evaluate import (
+    best_precision_threshold,
     classification_metrics,
     confidence_table,
     confusion_pairs,
@@ -244,7 +246,20 @@ def stage_evaluate(paths: Paths) -> dict:
     pv = _predict_all(model, feat, texts_v, K)
     valid_correct = pv["ncm_topk"][:, 0] == y_valid
     calib = confidence_table(pv["ncm_prob"][:, 0], valid_correct, CONFIDENCE_EDGES)
-    threshold = pick_threshold(pv["ncm_prob"][:, 0], valid_correct, AUDIT_TARGET_PRECISION, np.arange(0.5, 1.0, 0.01))
+    grid = np.arange(0.5, 1.0, 0.01)
+    threshold = pick_threshold(pv["ncm_prob"][:, 0], valid_correct, AUDIT_TARGET_PRECISION, grid)
+    criterion = "alvo"
+    if threshold is None:
+        threshold, _ = best_precision_threshold(pv["ncm_prob"][:, 0], valid_correct, grid)
+        criterion = "maxima_precisao"
+    above = pv["ncm_prob"][:, 0] >= threshold
+    audit_info = {
+        "target_precision": AUDIT_TARGET_PRECISION,
+        "threshold": round(threshold, 2),
+        "criterion": criterion,
+        "precision_at_threshold": round(float(valid_correct[above].mean()), 4),
+        "n_above_valid": int(above.sum()),
+    }
     valid_metrics = {
         name: classification_metrics(y_valid[idx], pv["ncm_topk"][idx]) for name, idx in _subsets(valid).items()
     }
@@ -311,7 +326,7 @@ def stage_evaluate(paths: Paths) -> dict:
         "model": model.describe(),
         "fit_seconds": {"capitulo": _sum_ckpt_seconds(ckpt), "ncm": heads["summary"]["segundos_ncm"]},
         "temperatures": temps,
-        "audit": {"target_precision": AUDIT_TARGET_PRECISION, "threshold": threshold},
+        "audit": audit_info,
         "valid_metrics_svm": valid_metrics,
         "test_results": results,
         "latency": latency,
@@ -362,11 +377,11 @@ def _error_examples(test, pt, y_test, idx, ncm_names, n: int) -> pd.DataFrame:
 
 
 def _fmt(x: float) -> str:
-    return f"{100 * x:.1f}%"
+    return pct(x)
 
 
-def _br(s: str) -> str:
-    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+def _opt(x, nd: int = 4) -> str:
+    return "" if x is None or x != x else num(x, nd)
 
 
 def _write_report(meta, calib, chapter_report, chapter_confusions, ncm_confusions, errors, cap_names, ncm_names):
@@ -383,26 +398,22 @@ def _write_report(meta, calib, chapter_report, chapter_confusions, ncm_confusion
     L.append("")
     tr, te = s["train"], s["test"]
     L.append(
-        _br(
-            f"- Treino: **{tr['descricoes_unicas']:,}** descricoes unicas (de {tr['itens_originais']:,} itens), "
-            f"{tr['ncm_distintos']:,} NCMs, {tr['capitulos_distintos']} capitulos."
-        )
+        f"- Treino: **{num(tr['descricoes_unicas'])}** descricoes unicas (de {num(tr['itens_originais'])} itens), "
+        f"{num(tr['ncm_distintos'])} NCMs, {tr['capitulos_distintos']} capitulos."
     )
     L.append(
-        f"- Ruido de rotulo no treino: {tr['pct_descricoes_com_mais_de_um_ncm']}% das descricoes aparecem "
-        f"com mais de um NCM, e elas concentram {tr['pct_itens_com_descricao_ambigua']}% dos itens "
-        f"(pureza media do rotulo {tr['pureza_media_do_rotulo']})."
+        f"- Ruido de rotulo no treino: {num(tr['pct_descricoes_com_mais_de_um_ncm'], 2)}% das descricoes aparecem "
+        f"com mais de um NCM, e elas concentram {num(tr['pct_itens_com_descricao_ambigua'], 2)}% dos itens "
+        f"(pureza media do rotulo {num(tr['pureza_media_do_rotulo'], 4)})."
     )
     L.append(
-        _br(
-            f"- Teste: **{te['itens']:,}** itens, {te['descricoes_unicas']:,} descricoes unicas; "
-            f"{te['pct_itens_vistos']}% dos itens tem descricao identica a alguma do treino e "
-            f"{te['descricoes_unicas_nao_vistas']:,} descricoes unicas nunca foram vistas."
-        )
+        f"- Teste: **{num(te['itens'])}** itens, {num(te['descricoes_unicas'])} descricoes unicas; "
+        f"{num(te['pct_itens_vistos'], 2)}% dos itens tem descricao identica a alguma do treino e "
+        f"{num(te['descricoes_unicas_nao_vistas'])} descricoes unicas nunca foram vistas."
     )
     L.append(
         f"- Entre os itens vistos, a mesma descricao recebeu o mesmo NCM do treino em "
-        f"{te['pct_vistos_em_que_lookup_acerta']}% dos casos "
+        f"{num(te['pct_vistos_em_que_lookup_acerta'], 2)}% dos casos "
         "(o resto e inconsistencia de classificacao entre fornecedores, nao erro do modelo)."
     )
     L.append("")
@@ -422,60 +433,69 @@ def _write_report(meta, calib, chapter_report, chapter_confusions, ncm_confusion
             for sname, m in subs.items():
                 mm = m[task]
                 L.append(
-                    _br(
-                        f"| {mname} | {sname} | {mm['n']:,} | {_fmt(mm['top1'])} | {_fmt(mm['top5'])} | "
-                        f"{_fmt(mm['f1_macro'])} | {_fmt(mm['f1_weighted'])} |"
-                    )
+                    f"| {mname} | {sname} | {num(mm['n'])} | {_fmt(mm['top1'])} | {_fmt(mm['top5'])} | "
+                    f"{_fmt(mm['f1_macro'])} | {_fmt(mm['f1_weighted'])} |"
                 )
         L.append("")
     L.append("## Modelo e custo")
     L.append("")
     md, ft, lat, fs = meta["model"], meta["features"], meta["latency"], meta["fit_seconds"]
     L.append(
-        _br(
-            f"- Features: TF-IDF palavra (1-2 gramas, {ft['word_vocab']:,} termos) + "
-            f"caractere (3-5, {ft['char_vocab']:,} termos) = {ft['n_features']:,} dimensoes, float32, "
-            f"{ft['nnz']:,} valores nao nulos em {ft['train_rows']:,} linhas; ajuste em {ft['fit_seconds']}s."
-        )
+        f"- Features: TF-IDF palavra (1-2 gramas, {num(ft['word_vocab'])} termos) + "
+        f"caractere (3-5, {num(ft['char_vocab'])} termos) = {num(ft['n_features'])} dimensoes, float32, "
+        f"{num(ft['nnz'])} valores nao nulos em {num(ft['train_rows'])} linhas; "
+        f"ajuste em {num(ft['fit_seconds'], 1)} s."
     )
     L.append(
-        _br(
-            f"- Modelo: LinearSVC um-contra-todos do capitulo ({md['capitulos']} classes, "
-            f"{md['coeficientes_capitulo']:,} coeficientes densos float32) + {md['sub_modelos']} LinearSVC por "
-            f"capitulo ({md['ncm_classes']:,} NCMs; {md['capitulos_com_um_ncm']} capitulos tem um unico NCM). "
-            f"Pesos dos sub-modelos podados para esparso: {md.get('poda_pct_retida')}% dos coeficientes retidos, "
-            f"{md['coeficientes_ncm_apos_poda']:,} no total, concordancia top-1 com o modelo denso nas "
-            f"descricoes de treino = {md.get('poda_concordancia_ponderada')}."
-        )
+        f"- Modelo: LinearSVC um-contra-todos do capitulo ({md['capitulos']} classes, "
+        f"{num(md['coeficientes_capitulo'])} coeficientes densos float32) + {md['sub_modelos']} LinearSVC por "
+        f"capitulo ({num(md['ncm_classes'])} NCMs; {md['capitulos_com_um_ncm']} capitulo(s) com um unico NCM). "
+        f"Pesos dos sub-modelos podados para esparso: {num(md['poda_pct_retida'], 2)}% dos coeficientes retidos, "
+        f"{num(md['coeficientes_ncm_apos_poda'])} no total, concordancia top-1 com o modelo denso nas "
+        f"descricoes de treino = {num(md['poda_concordancia_ponderada'], 4)}."
     )
-    L.append(f"- Tempo de treino (CPU, 1 nucleo): capitulo {fs['capitulo']}s, NCM {fs['ncm']}s.")
     L.append(
-        f"- Calibracao por temperatura no mes de validacao: T_capitulo = {md['t_chapter']:.3f}, "
-        f"T_ncm = {md['t_ncm']:.3f}."
+        f"- Tempo de treino (CPU, 1 nucleo): capitulo {num(fs['capitulo'] / 60, 1)} min, "
+        f"NCM {num(fs['ncm'] / 60, 1)} min."
+    )
+    L.append(
+        f"- Calibracao por temperatura no mes de validacao: T_capitulo = {num(md['t_chapter'], 3)}, "
+        f"T_ncm = {num(md['t_ncm'], 3)}."
     )
     L.append(
         f"- Latencia de inferencia ponta a ponta (texto normalizado -> top-5, CPU, 2 nucleos): item unico "
-        f"p50 {lat['single_p50_ms']} ms, p95 {lat['single_p95_ms']} ms; em lote de {lat['batch_size']}: "
-        f"{lat['batch_ms_per_item']} ms/item. Mes de teste inteiro previsto em {meta['predict_seconds_test']}s."
+        f"p50 {num(lat['single_p50_ms'], 1)} ms, p95 {num(lat['single_p95_ms'], 1)} ms; em lote de "
+        f"{num(lat['batch_size'])}: {num(lat['batch_ms_per_item'], 3)} ms/item. Mes de teste inteiro previsto em "
+        f"{num(meta['predict_seconds_test'], 1)} s."
     )
     L.append(f"- Artefatos em `models/` ({meta['model_bytes'] / 1e6:.0f} MB, fora do git).")
     L.append("")
     L.append("## Calibracao (mes de validacao) e limiar da auditoria")
     L.append("")
+    au = meta["audit"]
     L.append(
         "Acuracia do top-1 por faixa de confianca P(ncm) e precisao acumulada acima de cada faixa. "
-        f"Limiar escolhido para a auditoria (precisao >= {int(100 * meta['audit']['target_precision'])}%): "
-        f"**{meta['audit']['threshold']}**."
+        f"Meta da auditoria: precisao >= {int(100 * au['target_precision'])}% no mes de validacao."
     )
+    L.append("")
+    thr_txt = num(au["threshold"], 2)
+    if au["criterion"] == "alvo":
+        L.append(f"Limiar escolhido: **{thr_txt}** (menor limiar que atinge a meta).")
+    else:
+        n_txt = num(au["n_above_valid"])
+        L.append(
+            "A meta nao e alcancavel nestes dados: precisao aqui e concordancia com o NCM declarado, e o "
+            "declarado tem ruido (descricoes identicas recebem NCMs diferentes de fornecedores diferentes). "
+            f"Limiar escolhido: **{thr_txt}**, o de maior precisao com pelo menos 1.000 itens acima "
+            f"({n_txt} itens, precisao {_fmt(au['precision_at_threshold'])})."
+        )
     L.append("")
     L.append("| Faixa | n | Acuracia na faixa | n acima | Precisao acima |")
     L.append("|---|---:|---:|---:|---:|")
     for _, row in calib.iterrows():
         L.append(
-            _br(
-                f"| {row['faixa']} | {row['n']:,} | {row['acuracia_na_faixa']} | {row['n_acima']:,} | "
-                f"{row['precisao_acima']} |"
-            )
+            f"| {row['faixa'].replace(', ', '; ').replace('.', ',')} | {num(row['n'])} | "
+            f"{_opt(row['acuracia_na_faixa'])} | {num(row['n_acima'])} | {_opt(row['precisao_acima'])} |"
         )
     L.append("")
     L.append("## Por capitulo (descricoes nao vistas, unicas; 20 maiores)")
@@ -484,10 +504,8 @@ def _write_report(meta, calib, chapter_report, chapter_confusions, ncm_confusion
     L.append("|---|---|---:|---:|---:|---:|")
     for _, row in chapter_report.head(20).iterrows():
         L.append(
-            _br(
-                f"| {row['classe']} | {row['nome'][:60]} | {row['precisao']} | {row['recall']} | {row['f1']} | "
-                f"{row['suporte']:,} |"
-            )
+            f"| {row['classe']} | {row['nome'][:60]} | {num(row['precisao'], 3)} | {num(row['recall'], 3)} | "
+            f"{num(row['f1'], 3)} | {num(row['suporte'])} |"
         )
     L.append("")
     L.append("## Capitulos mais confundidos (verdadeiro -> previsto)")
@@ -495,14 +513,14 @@ def _write_report(meta, calib, chapter_report, chapter_confusions, ncm_confusion
     L.append("| Verdadeiro | Previsto | n |")
     L.append("|---|---|---:|")
     for t, p, c in chapter_confusions:
-        L.append(f"| {t} {(cap_names.get(t) or '')[:40]} | {p} {(cap_names.get(p) or '')[:40]} | {c} |")
+        L.append(f"| {t} {(cap_names.get(t) or '')[:40]} | {p} {(cap_names.get(p) or '')[:40]} | {num(c)} |")
     L.append("")
     L.append("## NCMs mais confundidos (verdadeiro -> previsto)")
     L.append("")
     L.append("| Verdadeiro | Previsto | n |")
     L.append("|---|---|---:|")
     for t, p, c in ncm_confusions:
-        L.append(f"| {t} {(ncm_names.get(t) or '')[:45]} | {p} {(ncm_names.get(p) or '')[:45]} | {c} |")
+        L.append(f"| {t} {(ncm_names.get(t) or '')[:45]} | {p} {(ncm_names.get(p) or '')[:45]} | {num(c)} |")
     L.append("")
     L.append("## Exemplos de erro (descricoes nao vistas, ordenados por confianca)")
     L.append("")
@@ -511,7 +529,7 @@ def _write_report(meta, calib, chapter_report, chapter_confusions, ncm_confusion
     for _, e in errors.iterrows():
         L.append(
             f"| {str(e['descricao'])[:70]} | {e['ncm_declarado']} {str(e['ncm_declarado_desc'])[:40]} | "
-            f"{e['ncm_previsto']} {str(e['ncm_previsto_desc'])[:40]} | {e['confianca']} | "
+            f"{e['ncm_previsto']} {str(e['ncm_previsto_desc'])[:40]} | {num(e['confianca'], 3)} | "
             f"{'sim' if e['declarado_no_top5'] else 'nao'} | {'sim' if e['mesmo_capitulo'] else 'nao'} |"
         )
     L.append("")

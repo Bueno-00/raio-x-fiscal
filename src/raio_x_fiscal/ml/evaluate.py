@@ -107,3 +107,23 @@ def pick_threshold(prob: np.ndarray, correct: np.ndarray, target_precision: floa
         if m.sum() >= 100 and correct[m].mean() >= target_precision:
             return float(t)
     return None
+
+
+def best_precision_threshold(
+    prob: np.ndarray, correct: np.ndarray, grid: np.ndarray, min_support: int = 1000
+) -> tuple[float, float] | None:
+    """Threshold with the highest cumulative precision among those keeping at least `min_support` items.
+
+    Fallback for when the target is out of reach. Here "precision" is agreement with the declared
+    NCM, and the declared NCM is itself noisy (identical descriptions get different codes from
+    different suppliers), so the attainable agreement has a ceiling below 100% that no model removes.
+    """
+    best = None
+    for t in grid:
+        m = prob >= t
+        if m.sum() < min_support:
+            continue
+        p = float(correct[m].mean())
+        if best is None or p > best[1]:
+            best = (float(t), p)
+    return best

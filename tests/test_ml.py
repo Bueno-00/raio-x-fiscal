@@ -8,7 +8,13 @@ import pytest
 
 from raio_x_fiscal.config import Paths
 from raio_x_fiscal.ml import dataset
-from raio_x_fiscal.ml.evaluate import classification_metrics, confusion_pairs, pick_threshold, topk_accuracy
+from raio_x_fiscal.ml.evaluate import (
+    best_precision_threshold,
+    classification_metrics,
+    confusion_pairs,
+    pick_threshold,
+    topk_accuracy,
+)
 from raio_x_fiscal.ml.features import TextFeaturizer
 from raio_x_fiscal.ml.fit import fit_chapter_head, fit_hierarchical, prune
 from raio_x_fiscal.ml.models import LookupBaseline, MajorityBaseline, chapter_of, hybrid_topk, softmax
@@ -121,6 +127,16 @@ def test_metrics_helpers():
     correct = np.array([True, True, False, False] * 50)
     assert pick_threshold(prob, correct, 0.95, np.arange(0.5, 1.0, 0.01)) == pytest.approx(0.61, abs=0.011)
     assert pick_threshold(prob, correct, 0.999, np.arange(0.5, 0.6, 0.01)) is None
+
+
+def test_best_precision_threshold_respects_support():
+    # Precision rises with the threshold, but only 50 items sit above 0.9: too few to trust.
+    prob = np.concatenate([np.full(1000, 0.6), np.full(1000, 0.8), np.full(50, 0.95)])
+    correct = np.concatenate([np.zeros(1000, bool), np.r_[np.ones(900, bool), np.zeros(100, bool)], np.ones(50, bool)])
+    t, p = best_precision_threshold(prob, correct, np.arange(0.5, 1.0, 0.1), min_support=500)
+    assert t == pytest.approx(0.7)
+    assert p == pytest.approx(950 / 1050)
+    assert best_precision_threshold(prob, correct, np.arange(0.5, 1.0, 0.1), min_support=10_000) is None
 
 
 def test_predictor_roundtrip(trained, tmp_path):
