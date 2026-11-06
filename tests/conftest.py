@@ -62,10 +62,10 @@ def _header(chave, numero, emit, razao, ie, uf, mun, data="05/01/2025 00:00:00")
 
 
 NOTAS = [
-    (_header(K1, "1", "11222333000181", "JM DISTRIBUIDORA LTDA", "202894720", "RN", "NATAL"), "791,95"),
-    (_header(K2, "2", "11222333000181", "JM DISTRIBUIDORA LTDA", "202894720", "RN", "NATAL"), "1.300,00"),
-    (_header(K3, "3", "11222333000181", "JM DISTRIBUIDORA LTDA", "202894720", "RN", "NATAL"), "10,00"),
-    (_header(K4, "4", "11222333000181", "JM DISTRIBUIDORA LTDA", "Sem informação", "RN", "NATAL"), "50,00"),
+    (_header(K1, "1", "11222333000181", "DISTRIBUIDORA EXEMPLO LTDA", "123456789", "RN", "NATAL"), "791,95"),
+    (_header(K2, "2", "11222333000181", "DISTRIBUIDORA EXEMPLO LTDA", "123456789", "RN", "NATAL"), "1.300,00"),
+    (_header(K3, "3", "11222333000181", "DISTRIBUIDORA EXEMPLO LTDA", "123456789", "RN", "NATAL"), "10,00"),
+    (_header(K4, "4", "11222333000181", "DISTRIBUIDORA EXEMPLO LTDA", "Sem informação", "RN", "NATAL"), "50,00"),
     (_header(K6, "5", "12345678901", "FULANO DE TAL", "-1", "SP", "SÃO PAULO"), "99,90"),
 ]
 
@@ -206,7 +206,7 @@ def nota_rows() -> list[dict]:
 
 def item_rows() -> list[dict]:
     headers = {K1: NOTAS[0][0], K2: NOTAS[1][0], K3: NOTAS[2][0], K6: NOTAS[4][0]}
-    headers[K5] = _header(K5, "6", "11222333000181", "JM DISTRIBUIDORA LTDA", "202894720", "RN", "NATAL")
+    headers[K5] = _header(K5, "6", "11222333000181", "DISTRIBUIDORA EXEMPLO LTDA", "123456789", "RN", "NATAL")
     out = []
     for chave, _num, nprod, desc, ncm, ncm_desc, cfop, qtd, unid, vu, vt in ITENS:
         r = dict(headers[chave])
