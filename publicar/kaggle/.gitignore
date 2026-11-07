@@ -1,0 +1,6 @@
+# arquivos de dados do dataset (grandes, regeneráveis com `make publish`); só metadata fica no git
+dataset/*.parquet
+dataset/*.csv.gz
+dataset/manifest.json
+dataset/DATASET_CARD.md
+dataset/DATASET_CARD.en.md

@@ -59,8 +59,12 @@ from sklearn.metrics import f1_score
 
 # ---------------------------------------------------------------- configuração
 KAGGLE_IN = Path("/kaggle/input")
-_cands = sorted(KAGGLE_IN.glob("*/nfe_ncm_dataset.parquet")) if KAGGLE_IN.exists() else []
+if KAGGLE_IN.exists():
+    print("entradas em /kaggle/input:", [str(q.relative_to(KAGGLE_IN)) for q in KAGGLE_IN.rglob("*") if q.is_file()][:20])
+_cands = sorted(KAGGLE_IN.rglob("nfe_ncm_dataset*.parquet")) if KAGGLE_IN.exists() else []
 DATA = Path(os.environ.get("RXF_PUBLISH_PARQUET", _cands[0] if _cands else "nfe_ncm_dataset.parquet"))
+assert DATA.exists(), f"arquivo não encontrado: {DATA}. Adicione o dataset rafabueno/nfe-ncm-brasil-raio-x-fiscal em 'Add input'."
+
 
 MODO_RAPIDO = True            # False = protocolo completo (demora ~45 min em CPU)
 SMOKE = os.environ.get("RXF_NB_SMOKE") == "1"   # só para testar o notebook fora do Kaggle

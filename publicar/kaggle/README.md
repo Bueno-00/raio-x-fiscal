@@ -13,6 +13,8 @@ make publish                                       # gera data/publish/ (parquet
 .venv/bin/kaggle datasets version -p publicar/kaggle/dataset -t -m "mensagem"   # versões seguintes
 ```
 
+Lições da 1ª subida (07/11/2026): o Kaggle **descompacta o `.csv.gz`** (virou `nfe_ncm_dataset.csv` de 731 MB); na próxima versão subir só o Parquet (ou aceitar o CSV grande). Arquivos ocultos da pasta (`.gitignore`) também sobem: por isso o `.gitignore` fica em `publicar/kaggle/`, não em `dataset/`. Título até 50 caracteres, subtítulo de 20 a 80; o título do notebook precisa virar o mesmo slug do `id` (ex.: "Raio-X Fiscal NCM baseline"). Na versão 1 do notebook o parquet não foi achado com `glob("*/...")`; a busca agora é recursiva (`rglob`) e imprime o que existe em `/kaggle/input`.
+
 Varredura de privacidade antes de subir: `publicar/kaggle/varredura.py` (colunas proibidas, CNPJ/CPF, e-mail, caminho de servidor, chave de 44 dígitos). Resultado de 06/11/2026: nenhuma coluna identificadora; nenhum CPF de pessoa; 10 CNPJs de fabricante digitados dentro da descrição livre, mascarados como `[cnpj]` pelo `rxf publish`.
 
 ## 2. Notebook `rafabueno/raio-x-fiscal-ncm-baseline`
