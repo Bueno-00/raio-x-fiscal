@@ -1,0 +1,42 @@
+{
+  "title": "NF-e públicas BR: descrição de produto → NCM",
+  "id": "rafabueno/nfe-ncm-brasil-raio-x-fiscal",
+  "subtitle": "3,09 mi itens de NF-e do governo federal: texto do fornecedor + NCM",
+  "licenses": [
+    {
+      "name": "ODbL-1.0"
+    }
+  ],
+  "keywords": [
+    "text classification",
+    "nlp",
+    "portuguese",
+    "brazil",
+    "tax",
+    "e-commerce",
+    "tabular"
+  ],
+  "description": "Itens de notas fiscais eletrônicas (NF-e) de compras do governo federal brasileiro, publicados como dados abertos pelo Portal da Transparência (CGU), com a descrição livre do produto escrita pelo fornecedor e o NCM de 8 dígitos declarado. Tarefa principal: classificar a descrição no NCM (8 dígitos) ou no capítulo (2 dígitos). 3.094.298 itens, 6 meses (2025-04 a 2025-09), 7.381 NCMs, 96 capítulos, ~900 mil descrições distintas. Split temporal pronto (train 2025-04..07, valid 2025-08, test 2025-09) e coluna seen_in_train para separar generalização de memorização. Anonimizado: sem chave de acesso, CNPJ/CPF, razão social, destinatário; CNPJ de fabricante digitado dentro da descrição foi mascarado. Baseline (TF-IDF + SVM hierárquico): NCM top-1 78,7% em todos os itens do mês de teste e 60,0% (top-5 76,1%) em descrições nunca vistas. Código, pipeline e relatórios: https://github.com/Bueno-00/raio-x-fiscal (MIT). Card completo em DATASET_CARD.md (pt) e DATASET_CARD.en.md (en).\n\nEnglish: line items from Brazilian federal-government e-invoices (open data, Portal da Transparência / CGU) with the supplier's free-text product description and the declared 8-digit NCM (Mercosur tariff code). 3.09 M items, 6 months, 7,381 codes, temporal split and a seen_in_train flag. Anonymised. Baseline: 78.7% top-1 on all test items, 60.0% on unseen descriptions. See DATASET_CARD.en.md.",
+  "resources": [
+    {
+      "path": "nfe_ncm_dataset.parquet",
+      "description": "Todos os itens (3.094.298 linhas, 17 colunas), Parquet ZSTD. Colunas: item_id, split, mes_referencia, descricao_produto, descricao_normalizada, ncm_codigo (rótulo), capitulo, posicao, ncm_descricao, cfop, unidade, quantidade, valor_unitario, valor_total, emitente_uf, destinatario_uf, seen_in_train."
+    },
+    {
+      "path": "nfe_ncm_dataset.csv.gz",
+      "description": "Mesmo conteúdo em CSV gzip, para quem não usa Parquet."
+    },
+    {
+      "path": "manifest.json",
+      "description": "Contagens, sha256 dos arquivos e data de geração."
+    },
+    {
+      "path": "DATASET_CARD.md",
+      "description": "Dataset card em português: fonte, licença, privacidade, colunas, protocolo recomendado, baseline, limitações."
+    },
+    {
+      "path": "DATASET_CARD.en.md",
+      "description": "Dataset card in English."
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+# arquivos de dados (grandes, regeneráveis com `make publish`); ficam só o metadata e os cards
+*.parquet
+*.csv.gz
+manifest.json
+DATASET_CARD.md
+DATASET_CARD.en.md
