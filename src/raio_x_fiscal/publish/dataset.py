@@ -18,6 +18,13 @@ from raio_x_fiscal.config import Paths, connect
 
 log = logging.getLogger(__name__)
 
+# Free-text descriptions sometimes carry the *manufacturer's* CNPJ typed by the supplier
+# ("CNPJ FABRICANTE: 56.994.502/0001-30"). It is public corporate data, but the published
+# dataset promises "no CNPJ", so the formatted pattern is masked in both text columns.
+# (Checked on 2026-11-06: 10 formatted occurrences in 3.09 M rows; no CPF of a person found.)
+CNPJ_FORMATTED_RE = r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}"
+CNPJ_NORMALIZED_RE = r"\b\d{2} \d{3} \d{3} \d{4} \d{2}\b"
+
 PUBLIC_COLUMNS = [
     "item_id",
     "split",
@@ -56,7 +63,11 @@ def build_publish(paths: Paths) -> dict:
                        CASE WHEN i.mes_referencia IN ({train_months}) THEN 'train'
                             WHEN i.mes_referencia = '{splits["valid_month"]}' THEN 'valid'
                             WHEN i.mes_referencia = '{splits["test_month"]}' THEN 'test' END AS split,
-                       i.mes_referencia, i.descricao_produto, i.descricao_normalizada,
+                       i.mes_referencia,
+                       regexp_replace(i.descricao_produto, '{CNPJ_FORMATTED_RE}', '[cnpj]', 'g')
+                           AS descricao_produto,
+                       regexp_replace(i.descricao_normalizada, '{CNPJ_NORMALIZED_RE}', 'cnpj', 'g')
+                           AS descricao_normalizada,
                        i.ncm_codigo, i.capitulo, i.posicao, i.ncm_descricao, i.cfop, i.unidade,
                        i.quantidade, i.valor_unitario, i.valor_total, i.emitente_uf, i.destinatario_uf,
                        CASE WHEN i.mes_referencia IN ({train_months}) THEN NULL
@@ -85,7 +96,8 @@ def build_publish(paths: Paths) -> dict:
         },
         "source": "Portal da Transparencia (CGU), Notas Fiscais Eletronicas, dados abertos",
         "anonymisation": (
-            "sem chave de acesso, CPF/CNPJ, razao social, IE, CNPJ/nome do destinatario; item_id = md5(chave, item)"
+            "sem chave de acesso, CPF/CNPJ, razao social, IE, CNPJ/nome do destinatario; item_id = md5(chave, item); "
+            "CNPJ formatado dentro da descricao livre mascarado como [cnpj]"
         ),
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
