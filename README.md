@@ -1,6 +1,6 @@
 # Raio-X Fiscal
 
-**Português** · [English](README.en.md)
+**Português** · [English](README.en.md) · **Use no navegador:** https://raiox.zemploo.com.br (notas de exemplo prontas; as notas enviadas não são salvas em disco)
 
 Plataforma de IA para o setor contábil construída sobre **notas fiscais eletrônicas públicas**
 (compras do governo federal, Portal da Transparência): pipeline medalhão em DuckDB com qualidade
