@@ -66,10 +66,15 @@ def achar_colunas(cols: list[str]) -> dict[str, str]:
 def ler_planilha(path: Path) -> tuple[pd.DataFrame, dict]:
     """Lê CSV/XLSX como texto (sem converter NCM e GTIN em número). Devolve (df, info do formato)."""
     path = Path(path)
-    if path.suffix.lower() in (".xlsx", ".xlsm"):
-        df = pd.read_excel(path, dtype=str).fillna("")
+    return ler_planilha_bytes(path.name, path.read_bytes())
+
+
+def ler_planilha_bytes(nome: str, raw: bytes) -> tuple[pd.DataFrame, dict]:
+    """O mesmo que `ler_planilha`, para um arquivo que já está na memória (app web: nada vai para o disco)."""
+    if nome.lower().endswith((".xlsx", ".xlsm")):
+        df = pd.read_excel(io.BytesIO(raw), dtype=str).fillna("")
         return df, {"tipo": "xlsx"}
-    raw = path.read_bytes()
+    texto, enc = "", "utf-8"
     for enc in ("utf-8-sig", "latin-1"):
         try:
             texto = raw.decode(enc)
@@ -79,7 +84,7 @@ def ler_planilha(path: Path) -> tuple[pd.DataFrame, dict]:
     primeira = texto.splitlines()[0] if texto else ""
     sep = max([";", ",", "\t"], key=primeira.count)
     df = pd.read_csv(io.StringIO(texto), sep=sep, dtype=str, keep_default_na=False)
-    return df, {"tipo": "csv", "separador": sep, "codificacao": enc}
+    return df, {"tipo": "csv", "separador": sep, "codificacao": "utf-8" if enc == "utf-8-sig" else enc}
 
 
 def so_digitos(s: str) -> str:
@@ -98,7 +103,7 @@ def auditar_cadastro(df: pd.DataFrame, ctx) -> tuple[pd.DataFrame, dict]:
     desc = df[cols["descricao"]].astype(str).tolist()
     ncms = [so_digitos(x) for x in df[cols["ncm"]]]
     gtins = [so_digitos(x) for x in df[cols["gtin"]]] if "gtin" in cols else [""] * len(df)
-    sug = ctx.classificador.sugerir(desc, tabela) if ctx.classificador else {}
+    sug = ctx.classificador.sugerir(desc, tabela, k=10) if ctx.classificador else {}
 
     ncm_por_gtin: dict[str, Counter] = {}
     for g, n in zip(gtins, ncms, strict=True):
@@ -108,14 +113,14 @@ def auditar_cadastro(df: pd.DataFrame, ctx) -> tuple[pd.DataFrame, dict]:
     linhas = []
     for idx, (d, n, g) in enumerate(zip(desc, ncms, gtins, strict=True)):
         s = sug.get(normalize_description(d), [])
-        achados = R.regra_ncm_formato(n)
+        achados = R.regra_ncm_formato(n, tabela=tabela)
         if not achados and not tabela.existe(n):
             achados.append(
                 R.Achado(
                     "NCM_INEXISTENTE",
                     R.VERMELHO,
                     f"O NCM {R.fmt_ncm(n)} não existe na tabela oficial de hoje ({tabela.vigente_em}). "
-                    "A próxima nota com ele sai errada.",
+                    f"A próxima nota com ele sai errada.{R._hoje_no_grupo(n, tabela)}",
                     "Troque pelo NCM correto (veja a sugestão).",
                 )
             )
@@ -134,8 +139,10 @@ def auditar_cadastro(df: pd.DataFrame, ctx) -> tuple[pd.DataFrame, dict]:
             )
         nivel = max((a.nivel for a in achados), default=R.VERDE)
         ncm_sug = next((a.ncm_sugerido for a in achados if a.ncm_sugerido), None)
-        if not ncm_sug and any(a.regra in ("NCM_INEXISTENTE", "NCM_AUSENTE") for a in achados) and s:
-            ncm_sug = s[0][0]
+        if not ncm_sug and any(a.regra in ("NCM_INEXISTENTE", "NCM_AUSENTE") for a in achados):
+            from raio_x_fiscal.produto.motor import _sugestao_ncm
+
+            ncm_sug = _sugestao_ncm(achados, s, n, tabela)
         linhas.append(
             {
                 "linha_planilha": idx + 2,
@@ -222,7 +229,11 @@ def exportar_aprovados(correcao: Path, destino_dir: Path, max_linhas: int = 1000
         parte = saida.iloc[ini : ini + max_linhas]
         if parte.empty:
             break
-        arq = destino_dir / f"{prefixo}-parte-{k}.xlsx"
-        parte.to_excel(arq, index=False)
+        if bling:  # a ajuda do Bling manda importar em .csv (reconfirmado em 08/11/2026)
+            arq = destino_dir / f"{prefixo}-parte-{k}.csv"
+            parte.to_csv(arq, sep=";", index=False, encoding="utf-8-sig")
+        else:
+            arq = destino_dir / f"{prefixo}-parte-{k}.xlsx"
+            parte.to_excel(arq, index=False)
         arquivos.append(str(arq))
     return {"linhas_alteradas": len(saida), "arquivos": arquivos, "layout_bling": bling, "avisos": avisos}

@@ -30,6 +30,7 @@ MAX_XML_BYTES = 5 * 1024 * 1024
 MAX_ARQUIVOS = 20_000
 MAX_ZIP_TOTAL = 1024 * 1024 * 1024  # 1 GB descompactado por lote
 CANCELAMENTO = "110111"
+ARQUIVO_REGRAS = "regras-do-escritorio.csv"
 
 
 @dataclass
@@ -84,6 +85,7 @@ class Leitura:
     avisos: list[str] = field(default_factory=list)
     cancelamentos: set[str] = field(default_factory=set)
     arquivos_lidos: int = 0
+    regras_texto: str = ""  # regras-do-escritorio.csv que veio junto com as notas (se veio)
 
 
 def _q(path: str) -> str:
@@ -207,33 +209,58 @@ def parse_xml(raw: bytes, arquivo: str, grupo: str | None) -> tuple[Nota | None,
     return nota, None, None
 
 
+def _grupo_no_zip(nomes: list[str]) -> dict[str, str | None]:
+    """Pasta de cada XML dentro do zip, tirando a pasta-raiz comum a todos.
+
+    "notas/mercado/a.xml" e "notas/farmacia/b.xml" viram os grupos "mercado" e "farmacia";
+    XML solto (ou todos na mesma pasta) fica sem grupo próprio e herda o nome do zip.
+    """
+    pastas = [PurePosixPath(n).parent.parts for n in nomes]
+    comum = 0
+    if pastas:
+        while all(len(p) > comum for p in pastas) and len({p[comum] for p in pastas}) == 1:
+            comum += 1
+    return {n: (p[comum] if len(p) > comum else None) for n, p in zip(nomes, pastas, strict=True)}
+
+
+def _de_zip(data: bytes, nome_zip: str, grupo: str | None, nivel: int, total: list[int]):
+    """(nome, grupo, bytes) de cada XML de um .zip em memória (e de .zip dentro dele, 1 nível).
+
+    Nada é extraído para o disco. Limites: tamanho de cada XML e total descompactado do lote.
+    """
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        yield nome_zip, grupo, b"__ZIP_INVALIDO__"
+        return
+    infos = [i for i in zf.infolist() if not i.is_dir()]
+    xmls = [i.filename for i in infos if i.filename.lower().endswith(".xml")]
+    grupos = _grupo_no_zip(xmls)
+    for info in infos:
+        partes = PurePosixPath(info.filename).parts
+        if any(p.startswith(".") or p == "__MACOSX" for p in partes):
+            continue
+        total[0] += info.file_size
+        if total[0] > MAX_ZIP_TOTAL:
+            yield nome_zip, grupo, b"__ZIP_GRANDE__"
+            return
+        nome = f"{nome_zip}/{info.filename}"
+        low = info.filename.lower()
+        if low.endswith(".xml"):
+            g = grupos.get(info.filename) or grupo
+            if info.file_size > MAX_XML_BYTES:
+                yield nome, g, b"__XML_GRANDE__"
+                continue
+            yield nome, g, zf.read(info)
+        elif low.endswith(".zip") and nivel < 2:
+            yield from _de_zip(zf.read(info), nome, grupo, nivel + 1, total)
+        elif PurePosixPath(low).name == ARQUIVO_REGRAS and info.file_size <= 1024 * 1024:
+            yield nome, grupo, b"__REGRAS__" + zf.read(info)
+
+
 def _arquivos(raiz: Path) -> Iterator[tuple[str, str | None, bytes]]:
     """(nome, grupo, bytes) de cada XML encontrado, abrindo .zip (e .zip dentro de .zip, 1 nível)."""
     raiz = raiz.resolve()
-
-    def de_zip(data: bytes, nome_zip: str, grupo: str | None, nivel: int, total: list[int]):
-        try:
-            zf = zipfile.ZipFile(io.BytesIO(data))
-        except zipfile.BadZipFile:
-            yield nome_zip, grupo, b"__ZIP_INVALIDO__"
-            return
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            total[0] += info.file_size
-            if total[0] > MAX_ZIP_TOTAL:
-                yield nome_zip, grupo, b"__ZIP_GRANDE__"
-                return
-            nome = f"{nome_zip}/{info.filename}"
-            low = info.filename.lower()
-            if low.endswith(".xml"):
-                if info.file_size > MAX_XML_BYTES:
-                    yield nome, grupo, b"__XML_GRANDE__"
-                    continue
-                yield nome, grupo, zf.read(info)
-            elif low.endswith(".zip") and nivel < 2:
-                yield from de_zip(zf.read(info), nome, grupo, nivel + 1, total)
-
     total = [0]
     if raiz.is_file():
         itens = [raiz]
@@ -253,7 +280,32 @@ def _arquivos(raiz: Path) -> Iterator[tuple[str, str | None, bytes]]:
                 continue
             yield str(rel), grupo, p.read_bytes()
         elif low.endswith(".zip"):
-            yield from de_zip(p.read_bytes(), str(rel), grupo or p.stem, 1, total)
+            yield from _de_zip(p.read_bytes(), str(rel), grupo or p.stem, 1, total)
+
+
+def _arquivos_memoria(arquivos: list[tuple[str, bytes]]) -> Iterator[tuple[str, str | None, bytes]]:
+    """Mesmo que `_arquivos`, mas para arquivos que já estão na memória (envio pelo navegador).
+
+    `arquivos` = [(caminho relativo como o navegador mandou, bytes)]. A pasta de primeiro nível
+    vira o grupo, como no disco. Nada é gravado.
+    """
+    total = [0]
+    limpos = [(PurePosixPath(nome.replace("\\", "/")), raw) for nome, raw in arquivos]
+    limpos = [(r, b) for r, b in limpos if not any(p.startswith(".") or p == "__MACOSX" for p in r.parts)]
+    soltos = [str(r) for r, _ in limpos if r.suffix.lower() in (".xml", ".zip")]
+    grupos = _grupo_no_zip(soltos)
+    for rel, raw in limpos:
+        grupo = grupos.get(str(rel))
+        low = rel.name.lower()
+        if low.endswith(".xml"):
+            if len(raw) > MAX_XML_BYTES:
+                yield str(rel), grupo, b"__XML_GRANDE__"
+                continue
+            yield str(rel), grupo, raw
+        elif low.endswith(".zip"):
+            yield from _de_zip(raw, str(rel), grupo or rel.stem, 1, total)
+        elif low == ARQUIVO_REGRAS and len(raw) <= 1024 * 1024:
+            yield str(rel), grupo, b"__REGRAS__" + raw
 
 
 ESPECIAIS = {
@@ -263,17 +315,20 @@ ESPECIAIS = {
 }
 
 
-def ler_entrada(caminho: Path) -> Leitura:
-    """Lê tudo o que for XML de NF-e no caminho (arquivo, pasta ou zip)."""
+def _ler(fonte: Iterator[tuple[str, str | None, bytes]], max_arquivos: int = MAX_ARQUIVOS) -> Leitura:
     leitura = Leitura()
     vistos: set[str] = set()
-    for nome, grupo, raw in _arquivos(Path(caminho)):
+    for nome, grupo, raw in fonte:
         if raw in ESPECIAIS:
             leitura.avisos.append(f"{nome}: {ESPECIAIS[raw]}")
             continue
+        if raw.startswith(b"__REGRAS__"):
+            if not leitura.regras_texto:
+                leitura.regras_texto = raw[len(b"__REGRAS__") :].decode("utf-8-sig", errors="replace")
+            continue
         leitura.arquivos_lidos += 1
-        if leitura.arquivos_lidos > MAX_ARQUIVOS:
-            leitura.avisos.append(f"mais de {MAX_ARQUIVOS} arquivos: o resto foi ignorado")
+        if leitura.arquivos_lidos > max_arquivos:
+            leitura.avisos.append(f"mais de {max_arquivos} arquivos: o resto foi ignorado")
             break
         nota, cancelada, aviso = parse_xml(raw, nome, grupo)
         if aviso:
@@ -289,6 +344,16 @@ def ler_entrada(caminho: Path) -> Leitura:
     for n in leitura.notas:
         n.cancelada = n.chave in leitura.cancelamentos
     return leitura
+
+
+def ler_entrada(caminho: Path) -> Leitura:
+    """Lê tudo o que for XML de NF-e no caminho (arquivo, pasta ou zip)."""
+    return _ler(_arquivos(Path(caminho)))
+
+
+def ler_memoria(arquivos: list[tuple[str, bytes]], max_arquivos: int = MAX_ARQUIVOS) -> Leitura:
+    """Lê XML e .zip que já estão na memória (app web): nada vai para o disco."""
+    return _ler(_arquivos_memoria(arquivos), max_arquivos)
 
 
 def empresa_do_grupo(notas: list[Nota]) -> str | None:

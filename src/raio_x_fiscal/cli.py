@@ -13,6 +13,8 @@ rxf pesquisar "leite condensado 395 g"   # porta 3: os 3 NCMs mais prováveis
 rxf ncm-atualizar                        # robô da tabela NCM oficial (rodar 1x por dia)
 rxf exemplos                             # gera as notas sintéticas de exemplo
 rxf painel                               # página local em http://127.0.0.1:8765
+rxf app                                  # app web em http://127.0.0.1:8770 (o Nginx publica)
+rxf exemplos-lojas                       # notas de exemplo de 8 comércios + gabarito (exemplos/lojas)
 """
 
 from __future__ import annotations
@@ -122,11 +124,16 @@ def build_parser() -> argparse.ArgumentParser:
     av.add_argument("--amostra", type=int, default=50_000)
     pn = sub.add_parser("painel", help="página local (só 127.0.0.1) com as 3 portas")
     pn.add_argument("--porta", type=int, default=8765)
+    ap = sub.add_parser("app", help="app web (só 127.0.0.1; o Nginx publica): 3 portas, upload só na memória")
+    ap.add_argument("--porta", type=int, default=8770)
+    el = sub.add_parser("exemplos-lojas", help="notas de exemplo de 8 comércios (produtos do dado público) + gabarito")
+    el.add_argument("--destino", default=None, help="pasta (padrão: exemplos/lojas)")
     return p
 
 
 PRODUTO = {
     "auditar", "cadastro", "cadastro-exportar", "pesquisar", "ncm-atualizar", "exemplos", "painel", "avaliar-publico",
+    "app", "exemplos-lojas",
 }  # fmt: skip
 
 
@@ -244,6 +251,33 @@ def produto(args, paths: Paths) -> int:
         out = avaliar(paths, args.mes, args.amostra)
         print(json.dumps({k: v for k, v in out.items() if k != "por_regra"}, ensure_ascii=False))
         print("Relatório:", RELATORIO)
+        return 0
+
+    if args.cmd == "app":
+        from raio_x_fiscal.app.servidor import rodar
+
+        rodar(args.porta)
+        return 0
+
+    if args.cmd == "exemplos-lojas":
+        from raio_x_fiscal.produto import exemplos_lojas as EL
+
+        destino = Path(args.destino) if args.destino else ROOT / "exemplos" / "lojas"
+        out = EL.gerar(destino)
+        _, _, gab = EL.montar()
+        from raio_x_fiscal.produto import regras as R
+        from raio_x_fiscal.produto.nfe import ler_memoria
+
+        lt = ler_memoria(list(EL.arquivos().items()))
+        c = ctx(True)
+        c.escritorio = R.RegrasDoEscritorio.de_texto(lt.regras_texto, "exemplo")
+        res = motor.auditar_notas(lt, c)
+        conf = EL.conferir(res, gab)
+        rel = ROOT / "reports" / "exemplos_lojas.md"
+        rel.write_text(EL.relatorio_md(conf, res.resumo, res.resumo["modelo"]), encoding="utf-8")
+        out.update(itens=len(gab), erros_plantados=conf["erros_plantados"], erros_pegos=conf["erros_pegos"])
+        out["relatorio"] = str(rel)
+        print(json.dumps(out, ensure_ascii=False))
         return 0
 
     if args.cmd == "painel":

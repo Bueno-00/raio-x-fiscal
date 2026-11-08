@@ -387,10 +387,12 @@ def _estilo_planilha(ws, df: pd.DataFrame, col_semaforo: str | None, larguras: d
             c.alignment = Alignment(vertical="top", wrap_text=isinstance(c.value, str) and len(c.value) > 40)
 
 
-def xlsx_notas(res, destino: Path) -> Path:
+def xlsx_notas(res, destino):
+    """Grava a planilha em `destino` (caminho ou arquivo em memória, como io.BytesIO)."""
     from openpyxl import Workbook
 
-    destino = Path(destino)
+    if not hasattr(destino, "write"):
+        destino = Path(destino)
     s = res.resumo
     wb = Workbook()
     ws = wb.active
@@ -548,7 +550,7 @@ def html_cadastro(df: pd.DataFrame, resumo: dict, origem: str) -> str:
 </div><script>{JS}</script></body></html>"""
 
 
-def xlsx_cadastro(df: pd.DataFrame, resumo: dict, destino: Path) -> Path:
+def xlsx_cadastro(df: pd.DataFrame, resumo: dict, destino):
     from openpyxl import Workbook
 
     wb = Workbook()
@@ -571,4 +573,4 @@ def xlsx_cadastro(df: pd.DataFrame, resumo: dict, destino: Path) -> Path:
         wr.append(ln)
     wr.column_dimensions["A"].width = 100
     wb.save(destino)
-    return Path(destino)
+    return destino if hasattr(destino, "write") else Path(destino)

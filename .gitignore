@@ -30,3 +30,6 @@ airflow/.env
 # notas reais e relatórios do produto: NUNCA vão para o git
 entrada-local/
 saida-local/
+
+# notas de exemplo dos 8 comércios: vai só o .zip (a pasta aberta é regenerada por `rxf exemplos-lojas`)
+exemplos/lojas/notas-exemplo-raio-x/

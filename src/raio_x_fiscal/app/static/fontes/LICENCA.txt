@@ -1,0 +1,2 @@
+Fontes: Inter (Rasmus Andersson) e JetBrains Mono (JetBrains), ambas sob a SIL Open Font License 1.1.
+Subconjunto latino gerado com fonttools (pyftsubset). Licença: https://openfontlicense.org

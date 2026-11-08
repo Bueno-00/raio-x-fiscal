@@ -26,10 +26,13 @@ one, and it drives the tax rates applied to that item.
 > audit: 3,580 alerts in the test month; in a manual inspection of 60, **50 (83%)** were a wrong declared
 > NCM with the model's suggestion correct, and 3 (5%) were model errors.
 >
-> **Product (2026-11-07).** Checks NF-e XML, the product register spreadsheet or a typed description and
-> returns a traffic light per line item with the reason and the suggested NCM and CFOP. On a real sample of
-> 50,000 items from a month the model never saw: **0.6% red, 4.5% yellow, 94.9% green**, 1,629 items per
-> second on CPU. The official NCM table is checked by a daily job with version history. Everything local.
+> **Product (2026-11-07 and 08).** Checks NF-e XML, the product register spreadsheet or a typed description and
+> returns a traffic light per line item with the reason and the suggested NCM and CFOP, in a **web app**
+> (`rxf app`) or from the command line. On a real sample of 50,000 items from a month the model never saw:
+> **0.6% red, 6.0% yellow, 93.4% green**. On example invoices from 8 businesses (real product descriptions
+> from the public data, planted errors with an answer key): **184 of 186 errors flagged**. Fixes come out
+> in Bling's and Olist's import format (ready file) and as a list for Omie, Conta Azul and Domínio. The
+> official NCM table is checked by a daily job with version history.
 <!-- RESULTS_BOX_END -->
 
 ---
@@ -91,15 +94,45 @@ and an XLSX spreadsheet (to work on). No invoice leaves the machine: no external
 | 2. Product register | product spreadsheet exported from the ERP (CSV or XLSX; recognizes the Bling export) | `rxf cadastro <sheet>` | check the NCM **before** issuing invoices |
 | 3. Search | a typed description ("leite condensado 395 g") | `rxf pesquisar "<text>"` | the 3 most likely NCMs, with the official description and the confidence |
 
-`rxf painel` serves the three entry points on a local page (bound to `127.0.0.1` only, port 8765).
+**Web app (2026-11-08).** `rxf app` serves the three entry points on a page ready to publish (FastAPI,
+bound to `127.0.0.1:8770`; Nginx publishes it): upload XML, a folder or a `.zip`, "use example invoices",
+the product register and the search box, with a traffic light per item, filters by color, company and
+check, and downloads of the XLSX report and of the fix in the chosen ERP's format. Built for visitors who
+upload real invoices:
+- uploads are read **in memory** (the app reads the request body itself, skipping the server's temporary
+  file), checked and discarded; no access log; the result stays in memory for 30 minutes only so the
+  spreadsheet can be downloaded;
+- limits: 25 MB and 3,000 XML files per upload, 30,000 items, 12 uploads per IP per hour and 40 per day,
+  one check at a time; security headers (same-origin CSP, no framing, no referrer);
+- the "Pergunte ao Simples" chat (a separate project) only shows up if the `pergunte_ao_simples` package
+  is installed and `CHAT_ENV_FILE` points to an existing file; it receives the check summary without
+  names or tax IDs.
+
+`pip install -e ".[app]"` installs FastAPI and Uvicorn. `rxf painel` (the older local page, port 8765)
+is still there for machine-only use.
+
+**Example invoices from 8 businesses (2026-11-08).** `rxf exemplos-lojas` writes
+`exemplos/lojas/notas-exemplo-raio-x.zip`: a grocery store, auto parts, pharmacy, building supplies,
+clothing store, restaurant, stationery and IT store, in 8 states, 132 invoices (NF-e and NFC-e, layout
+4.00, test environment) and 667 items. The companies are made up; **the products are real descriptions
+from the public data**, with the NCM used 85% of the time or more (`scripts/extrair_catalogo_exemplos.py`
+-> `src/raio_x_fiscal/seeds/catalogo_exemplos.csv`). Errors were planted the way they happen in an
+accounting office (mostly in the product register, so they repeat on every invoice): NCM copied from
+another product, an outdated code, the leading zero eaten by Excel, a wrong GTIN, a regular-regime CST in
+a Simples company, in-state CFOP on an interstate sale and the reverse, a different NCM typed on one
+invoice only, a purchase CFOP on a sale, a cancelled invoice. The zip ships the **answer key** item by
+item, the office rules and each company's product register (the grocery store's in Bling's format).
+Result in [reports/exemplos_lojas.md](reports/exemplos_lojas.md) (Portuguese): **184 of 186 errors
+flagged**; the one that slipped through was a tea with the NCM of "food preparations", the model's
+second choice.
 
 **Checks per line item** (each one is a simple rule; the model covers what a rule cannot):
 
 | Check | Level | How it decides |
 |---|---|---|
-| NCM does not match the description | red / yellow | phase 1 model: red at confidence ≥ 0.99 with a different NCM (the audit threshold; 50 of 60 hand-inspected alerts were real errors); yellow at ≥ 0.90 with the declared NCM outside the top 5. Suggestions only use codes that exist in the current official table |
-| NCM does not exist or is out of force | red / yellow | official Siscomex table **on the invoice date** (red); for invoices older than the first stored table, compares with today's (yellow) |
-| NCM empty or shorter than 8 digits | red | format (a service item with ISSQN and NCM 00 is accepted) |
+| NCM does not match the description | red / yellow | phase 1 model: red at confidence ≥ 0.99 with a different NCM (the audit threshold; 50 of 60 hand-inspected alerts were real errors); yellow at ≥ 0.90 with the declared NCM outside the top 5; also yellow when the declared NCM is not even in the top 10 and belongs to another chapter (≥ 0.60) or another 4-digit heading (≥ 0.75), the typical NCM copied from another product (rule added 2026-11-08, measured on the public sample: +1.6% items flagged, 43% of them with an NCM almost nobody uses for that description, under 5% with the usual NCM). Suggestions only use codes that exist in the current official table |
+| NCM does not exist or is out of force | red / yellow | official Siscomex table **on the invoice date** (red); for invoices older than the first stored table, compares with today's (yellow). Lists today's codes in the same group and suggests the one the model prefers among them |
+| NCM empty or shorter than 8 digits | red | format (a service item with ISSQN and NCM 00 is accepted); with 7 digits, if the code with a leading zero exists, says Excel ate the zero and suggests the right code |
 | CFOP vs states | yellow | an in-state CFOP (5.xxx) on an interstate invoice, 6.xxx within one state, 7.xxx without a foreign buyer; suggests the mirror CFOP. **An in-person sale with 5.xxx turns green on its own.** Never red: it may be on purpose |
 | Inbound CFOP on an outbound invoice (or the reverse) | red | first digit vs `tpNF` |
 | CST vs tax regime | red | a Simples Nacional company (CRT 1 or 4) using a regular-regime CST, or the reverse with CSOSN |
@@ -127,16 +160,16 @@ at 6 am) is:
 0 6 * * * cd /path/raio-x-fiscal && .venv/bin/rxf ncm-atualizar >> data/ncm/cron.log 2>&1
 ```
 
-**Measured** (2026-11-07):
+**Measured** (2026-11-07 and 08):
 
-- **Example invoices** (`exemplos/`, synthetic XML with planted errors, 3 fictitious companies, one
-  `.zip` and one cancellation): 15 invoices, 41 items: 7 red, 7 yellow, 27 green, 2 alerts accepted by
-  the office rules. Every planted error is caught by the right rule (tests in `tests/test_produto.py`).
+- **Example invoices from the 8 businesses** (above): 132 invoices, 667 items, 186 planted errors, **184 flagged**.
+- **Minimal example invoices** (`exemplos/`, 3 fictitious companies, used by the tests): 15 invoices,
+  41 items; every planted error is caught by the right rule (`tests/test_produto.py`).
 - **Real sample of the public data**, 50,000 items (13,361 invoices) from 2025-09, a month the model
-  never saw: **0.6% red, 4.5% yellow, 94.9% green**; 1,629 items per second on a 2-core CPU. In other
-  words, out of every 1,000 items a person looks closely at 6. Details in
-  [reports/produto_amostra_publica.md](reports/produto_amostra_publica.md) (Portuguese).
-- 84 tests passing (26 for the product), `ruff` clean.
+  never saw: **0.6% red, 6.0% yellow, 93.4% green** (4.5% yellow before the 2026-11-08 rule); 1,629 items
+  per second on an idle 2-core CPU. Out of every 1,000 items a person looks closely at 6 and double-checks
+  60. Details in [reports/produto_amostra_publica.md](reports/produto_amostra_publica.md) (Portuguese).
+- 97 tests passing (26 for the product, 12 for the app, import formats and example invoices), `ruff` clean.
 
 **Does someone have to review everything?** No. The model and the rules do the triage; a person looks
 at the red items (0.6% in the sample) and decides; yellow items that are intentional become office
@@ -144,21 +177,21 @@ rules. The model's accuracy is measured automatically every month: train on the 
 measure on a month it has not seen (`rxf avaliar-publico --mes AAAAMM`), with nobody checking item by
 item.
 
-**Sending the corrected register back to the ERP.** The correction sheet has an "approved NCM" column:
-the person changes only what they agree with, and `rxf cadastro-exportar` returns **only the changed
-rows, in the original layout**.
-- **Bling: yes.** Bling's official help (accessed 2026-11-07) says you can export, edit the NCM and
-  import back through "Importar e Atualizar produtos" with the "Atualizar" (update) operation; the key
-  is the **ID** column; an emptied cell erases that field in the register; at most 1,000 products per
-  file. So the export keeps every column and the ID, only touches the NCM, and splits into parts of
-  1,000 ([how to edit and update products by spreadsheet](https://ajuda.bling.com.br/hc/pt-br/articles/360060827554),
-  [registering simple products by spreadsheet](https://ajuda.bling.com.br/hc/pt-br/articles/360062630653)).
-- **Domínio (Thomson Reuters): no public import layout found** for the product register. What the
-  official release notes say (2024-12-02) is that Domínio **compares the product's NCM with the NCM on
-  the invoice and creates a new validity period on its own** when they differ
-  ([dominiosistemas.com.br/atualizacoes](https://www.dominiosistemas.com.br/atualizacoes)). So the
-  right place to fix it is **before importing** (entry point 1) and in the system that issues the
-  invoice; the report hands the list to the accountant.
+**Sending the fix back to the ERP** (official help pages accessed 2026-11-08). The person approves the
+changes (in the app by ticking suggestions; on the command line in the "approved NCM" column) and Raio-X
+hands back a file the way each system accepts it. Code in `src/raio_x_fiscal/produto/formatos.py`.
+
+| ERP | Updates NCM by spreadsheet? | What Raio-X returns |
+|---|---|---|
+| **Bling** | yes: "Importar e Atualizar produtos", "Atualizar" operation; key **ID**; an emptied cell erases the field; up to 1,000 per file; the template is CSV | **ready file**: the same CSV you exported, approved rows only, NCM changed only, in parts of 1,000 ([help](https://ajuda.bling.com.br/hc/pt-br/articles/360060827554), [template](https://ajuda.bling.com.br/hc/pt-br/articles/360062630653)) |
+| **Olist ERP** (formerly Tiny) | yes: "Importar produtos de uma planilha" with the official template, column names and order unchanged; key **ID** (or SKU); recommends up to 500 per file | **ready file** in your export's layout, in parts of 500 ([help](https://ajuda.olist.com/produtos/importar-planilha-de-produtos)) |
+| **Omie** | yes, but only with the password-protected official template; **an empty cell erases the field**; the update key is not published (likely "Código do Produto") | a mapping list (code and new NCM) to paste into the template, with the warning ([help](https://ajuda.omie.com.br/pt-BR/articles/6590176-cadastrando-produtos-em-lote-via-planilha)) |
+| **Conta Azul** | **no**: the import only creates new products; NCM is edited product by product | a list to fix one by one ([help](https://ajuda.contaazul.com/hc/pt-br/articles/49003711419149-A%C3%A7%C3%B5es-em-lote-o-que-%C3%A9-poss%C3%ADvel-fazer-em-lote-na-Conta-Azul-Pro)) |
+| **Domínio** (Thomson Reuters) | **no public layout** for importing products (its knowledge base is customers-only); inside the system there is a bulk "Alterar Produtos" utility (solution 172) | a list for that utility or to ask support for the layout. Domínio also **creates a new NCM validity period on its own** when the XML differs from the register ([release notes](https://www.dominiosistemas.com.br/atualizacoes)), so the right place to fix it is **before importing** (entry point 1) |
+
+The list (XLSX) has a "Como usar" tab with the chosen ERP's steps and sources. From invoices (entry point
+1) the ERP's product ID is not in the XML, so that path always returns the list; Bling's and Olist's ready
+file comes from entry point 2, starting from the spreadsheet exported by the ERP itself.
 
 **Real invoices stay local.** `entrada-local/` and `saida-local/` are in `.gitignore`. `make auditar`
 checks whatever is in `entrada-local/` and writes `saida-local/<date-time>/relatorio.html` and
@@ -350,6 +383,10 @@ make test && make lint               # offline pytest (small fixtures) and ruff
 
 # inference
 .venv/bin/python -m raio_x_fiscal.ml.predict "ARROZ TIPO 1" "Vidro temperado 6mm" --k 3
+
+# web app (127.0.0.1:8770; put Nginx in front to publish) and the 8-business example invoices
+.venv/bin/pip install -e ".[app]" && .venv/bin/rxf app
+.venv/bin/rxf exemplos-lojas         # exemplos/lojas/notas-exemplo-raio-x.zip + reports/exemplos_lojas.md
 ```
 
 Optional environment variables: `RXF_DATA_DIR`, `RXF_MODELS_DIR`, `RXF_DUCKDB_MEMORY` (default
@@ -422,11 +459,23 @@ raio-x-fiscal/
 
 **Product, next steps.** Suggest the inbound CFOP from the office's own history (the mapping that is
 manual today); `cClassTrib` vs NCM after 2027 (tax reform); swap the traffic-light model for the phase 2
-BERTimbau if it wins on the test month; the Q&A chat inside the report (project A).
+TF-IDF + BERTimbau ensemble (on its own BERTimbau still loses; see below); the Q&A chat inside the app
+(project A; the slot is ready).
 
-**PHASE 2, first BERTimbau run (2026-11-07).** Fast mode (1 epoch, 16 minutes on a Kaggle T4, private):
-48.6% / 68.9% (top-1 / top-5) on never-seen descriptions, against the baseline's 60.0% / 76.1%. **The
-baseline still wins**; the full run (3 epochs) has been submitted. Details in `publicar/kaggle/bertimbau/README.en.md`.
+**PHASE 2, BERTimbau on Kaggle (2026-11-07 and 08, private).** Same test month (2025-09, 547,718 items) and
+the same subsets as the baseline:
+
+| Run | All items (top-1 / top-5) | Never-seen, unique (top-1 / top-5) | Macro F1 (never-seen) |
+|---|---:|---:|---:|
+| Baseline TF-IDF + SVM (hybrid with lookup) | **78.7%** / 87.8% | **60.0%** / 76.1% | **26.5%** |
+| BERTimbau v1, fast (1 epoch, 16 min on a T4) | 61.5% / 79.4% (hybrid 75.1% / 85.8%) | 48.6% / 68.9% | 9.0% |
+| BERTimbau v2, full (3 epochs, 64 tokens, 62 min on a T4) | 69.5% / 86.5% (hybrid 77.7% / **88.9%**) | 56.6% / **76.6%** | 19.4% |
+
+**The baseline still wins on what the traffic light uses** (the top NCM on never-seen descriptions: 60.0%
+vs 56.6%), so the traffic light keeps it. BERTimbau v2 already ties or wins at top-5 (76.6% vs 76.1% on
+never-seen; 88.9% vs 87.8% hybrid) and is more cautious: at confidence ≥ 0.99 it flags only 105
+disagreements in the month (0.02%), against the baseline's 3,580. Next step: an ensemble (averaged
+probabilities), measured again. Details in `publicar/kaggle/bertimbau/README.en.md`.
 
 **PHASE 2: a published model.** Fine-tuning a Portuguese encoder (BERTimbau base or similar) on Kaggle
 (free GPU) over this phase's anonymized dataset, with the same split protocol and the same four
@@ -444,7 +493,9 @@ the API key stays on the server only.
 
 ## Tests and lint
 
-`make test` runs 84 offline tests in seconds (26 for the product: XML, folder and zip reading, refusal of
+`make test` runs 97 offline tests (12 for the web app, import formats and the 8-business example
+invoices: zip upload that never touches disk, per-IP limit, maximum size, Bling CSV with approved rows
+only, Olist parts of 500, chat that only mounts with the package and the env file; 26 for the product: XML, folder and zip reading, refusal of
 unsafe XML, every rule with a right and a wrong case, office rules, the NCM table job without internet, a
 tiny model for NCM-vs-description and search, a report that escapes invoice text, the Bling spreadsheet
 round trip and the local panel); besides that: parsing of the latin-1 CSV and Brazilian decimals,

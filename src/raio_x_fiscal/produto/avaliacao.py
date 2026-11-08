@@ -189,7 +189,12 @@ def _escreve(o: dict, faixas: Counter, exemplos, ctx, t0) -> None:
         f"em {pct(o['concorda_top3'] / n)}.",
         f"- Vermelho do modelo: confiança ≥ {ctx.limiar_vermelho:.2f} e o NCM declarado diferente (o limiar da "
         "auditoria da fase 1, em que 50 de 60 alertas inspecionados à mão eram erro real).",
-        f"- Amarelo do modelo: confiança ≥ {ctx.limiar_amarelo:.2f} e o NCM declarado fora dos 5 mais prováveis.",
+        f"- Amarelo do modelo: confiança ≥ {ctx.limiar_amarelo:.2f} e o NCM declarado fora dos 5 mais prováveis; "
+        f"ou o NCM declarado fora dos 10 mais prováveis e de outro capítulo (confiança ≥ {R.LIMIAR_OUTRO_CAPITULO:.2f}) "
+        f"ou de outra posição de 4 dígitos (confiança ≥ {R.LIMIAR_OUTRA_POSICAO:.2f}). Esta última entrou em "
+        "08/11/2026: nesta amostra ela marca mais 1,6% dos itens; em 43% deles quase ninguém usa aquele NCM para "
+        "aquela descrição no dado público (provável erro real) e em menos de 5% o NCM da nota é o de sempre "
+        "(provável alarme falso).",
         "",
         "| Confiança do 1º NCM do modelo | Itens |",
         "|---|---:|",
@@ -200,7 +205,9 @@ def _escreve(o: dict, faixas: Counter, exemplos, ctx, t0) -> None:
     linhas += ["| Descrição | NCM da nota | Sugerido | Confiança |", "|---|---|---|---:|"]
     for _, r in exemplos.iterrows():
         d = str(r["descricao"]).replace("|", "/")[:70]
-        linhas.append(f"| {d} | {R.fmt_ncm(r['ncm'])} | {R.fmt_ncm(r['ncm_sugerido'])} | {pct(r['confianca_modelo'])} |")
+        linhas.append(
+            f"| {d} | {R.fmt_ncm(r['ncm'])} | {R.fmt_ncm(r['ncm_sugerido'])} | {pct(r['confianca_modelo'])} |"
+        )
     linhas += [
         "",
         "## Como ler",
@@ -208,7 +215,7 @@ def _escreve(o: dict, faixas: Counter, exemplos, ctx, t0) -> None:
         "- CFOP x estados vira amarelo, nunca vermelho: em compra pública muita venda entre estados sai com",
         "  5.xxx por ser presencial ou por regra da operação. A regra do escritório tira o que é de propósito.",
         "- NCM fora da tabela em nota de 2025 fica amarelo: a cópia mais antiga da tabela guardada é de",
-        "  07/11/2026, então para notas anteriores o Raio-X só diz \"não existe mais hoje; corrija o cadastro\".",
+        '  07/11/2026, então para notas anteriores o Raio-X só diz "não existe mais hoje; corrija o cadastro".',
         "",
     ]
     RELATORIO.write_text("\n".join(linhas), encoding="utf-8")

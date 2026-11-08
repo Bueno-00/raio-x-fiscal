@@ -138,11 +138,20 @@ def _texto(achados: list[R.Achado], attr: str) -> str:
     return " | ".join(partes)
 
 
-def _sugestao_ncm(achados: list[R.Achado], sugestoes: list) -> str | None:
+def _sugestao_ncm(achados: list[R.Achado], sugestoes: list, ncm: str = "", tabela=None) -> str | None:
     for a in achados:
         if a.ncm_sugerido and not a.aceito:
             return a.ncm_sugerido
-    if any(a.regra in ("NCM_INEXISTENTE", "NCM_AUSENTE") and not a.aceito for a in achados) and sugestoes:
+    if any(a.regra == "NCM_INEXISTENTE" and not a.aceito for a in achados):
+        # Código que saiu da tabela: primeiro o que o modelo prefere DENTRO do grupo que substituiu o antigo.
+        grupo = set(R.codigos_do_grupo(ncm, tabela)) if tabela is not None else set()
+        for c, _ in sugestoes:
+            if c in grupo:
+                return c
+        if grupo and len(grupo) <= 3:
+            return sorted(grupo)[0]
+        return sugestoes[0][0] if sugestoes else None
+    if any(a.regra == "NCM_AUSENTE" and not a.aceito for a in achados) and sugestoes:
         return sugestoes[0][0]
     return None
 
@@ -159,7 +168,7 @@ def auditar_notas(leitura: Leitura, ctx: Contexto) -> Resultado:
 
     sugestoes = {}
     if ctx.classificador:
-        sugestoes = ctx.classificador.sugerir([i.descricao for n in notas for i in n.itens], tabela)
+        sugestoes = ctx.classificador.sugerir([i.descricao for n in notas for i in n.itens], tabela, k=10)
 
     # Mesmo produto (emitente + código, ou GTIN) com NCMs diferentes dentro do grupo.
     ncm_por_produto: dict[tuple, Counter] = defaultdict(Counter)
@@ -193,7 +202,7 @@ def auditar_notas(leitura: Leitura, ctx: Contexto) -> Resultado:
                             "Não importe esta nota.",
                         )
                     )
-                achados += R.regra_ncm_formato(i.ncm, i.servico)
+                achados += R.regra_ncm_formato(i.ncm, i.servico, tabela)
                 if not i.servico:
                     achados += R.regra_ncm_tabela(i.ncm, n.data_emissao, ctx.historico)
                 if not any(a.regra in ("NCM_AUSENTE",) for a in achados):
@@ -210,7 +219,7 @@ def auditar_notas(leitura: Leitura, ctx: Contexto) -> Resultado:
                     achados += _contra_cadastro(i, ctx.cadastro, sentido)
                 ctx.escritorio.aplicar(achados, empresa, n.emit_cnpj, i.cfop, i.ncm, i.codigo)
                 nivel = _pior(achados)
-                ncm_sug = _sugestao_ncm(achados, sug)
+                ncm_sug = _sugestao_ncm(achados, sug, i.ncm, tabela)
                 cfop_sug = next((a.cfop_sugerido for a in achados if a.cfop_sugerido and not a.aceito), None)
                 linhas.append(
                     {

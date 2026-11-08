@@ -312,7 +312,8 @@ def test_cadastro_bling_ida_e_volta(pasta_exemplos, historico, tmp_path):
         corr.to_excel(w, sheet_name="Correção", index=False)
     r = CAD.exportar_aprovados(xlsx, tmp_path / "saida", max_linhas=1)
     assert r["linhas_alteradas"] == 2 and r["layout_bling"] and len(r["arquivos"]) == 2  # 1 por arquivo
-    partes = pd.concat(pd.read_excel(a, dtype=str).fillna("") for a in r["arquivos"])
+    assert all(a.endswith(".csv") for a in r["arquivos"])  # o Bling importa .csv
+    partes = pd.concat(pd.read_csv(a, sep=";", dtype=str, keep_default_na=False) for a in r["arquivos"])
     assert list(partes.columns) == list(df.columns)  # mesmo layout, nenhuma coluna a mais ou a menos
     assert set(partes["NCM"]) == {"3402.50.00", "0706.10.00"}  # formato com pontos, como veio
     assert set(partes["ID"]) == {"900006", "900005"} and set(partes["Preço"]) == {"12,90", "4,50"}

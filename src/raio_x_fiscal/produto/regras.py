@@ -81,7 +81,18 @@ def fmt_ncm(n: str | None) -> str:
 # ---------------------------------------------------------------------------------------------
 
 
-def regra_ncm_formato(ncm: str, servico: bool = False) -> list[Achado]:
+def codigos_do_grupo(ncm: str, tabela, maximo: int = 60) -> list[str]:
+    """Códigos que existem hoje no grupo mais próximo do NCM (mesmos 7, 6, 5 ou 4 primeiros dígitos)."""
+    if tabela is None or not ncm:
+        return []
+    for k in (7, 6, 5, 4):
+        filhos = sorted(c for c in tabela.folhas if c[:k] == ncm[:k])
+        if filhos:
+            return filhos[:maximo]
+    return []
+
+
+def regra_ncm_formato(ncm: str, servico: bool = False, tabela=None) -> list[Achado]:
     if servico:
         return []  # item de serviço (grupo ISSQN): NCM 00 é o esperado
     if _NCM_RE.match(ncm or "") and ncm != "00000000":
@@ -95,6 +106,18 @@ def regra_ncm_formato(ncm: str, servico: bool = False) -> list[Achado]:
                 "Se for mercadoria, coloque o NCM de 8 dígitos no cadastro. Se for serviço, está ok.",
             )
         ]
+    if re.fullmatch(r"\d{7}", ncm or "") and tabela is not None and tabela.existe("0" + ncm):
+        certo = "0" + ncm
+        return [
+            Achado(
+                "NCM_AUSENTE",
+                VERMELHO,
+                f"NCM '{ncm}' tem 7 dígitos: o zero da frente sumiu (comum quando a planilha passa pelo Excel). "
+                f"Com o zero, {fmt_ncm(certo)} existe: {tabela.curta(certo)}.",
+                f"Corrija o NCM no cadastro para {fmt_ncm(certo)} e deixe a coluna de NCM como texto na planilha.",
+                ncm_sugerido=certo,
+            )
+        ]
     return [
         Achado(
             "NCM_AUSENTE",
@@ -103,6 +126,14 @@ def regra_ncm_formato(ncm: str, servico: bool = False) -> list[Achado]:
             "Corrija o NCM no cadastro do produto antes da próxima nota.",
         )
     ]
+
+
+def _hoje_no_grupo(ncm: str, tabela) -> str:
+    grupo = codigos_do_grupo(ncm, tabela)
+    if not grupo:
+        return ""
+    mostra = ", ".join(fmt_ncm(c) for c in grupo[:4]) + (f" e mais {len(grupo) - 4}" if len(grupo) > 4 else "")
+    return f" No mesmo grupo, hoje existem: {mostra}."
 
 
 def regra_ncm_tabela(ncm: str, data_nota: date | None, historico) -> list[Achado]:
@@ -118,7 +149,7 @@ def regra_ncm_tabela(ncm: str, data_nota: date | None, historico) -> list[Achado
                     "NCM_INEXISTENTE",
                     VERMELHO,
                     f"O NCM {fmt_ncm(ncm)} não existe na tabela oficial que valia em {fmt_data(data_nota)} "
-                    f"(tabela de {fmt_data(da_data.desde)}, {da_data.ato}).",
+                    f"(tabela de {fmt_data(da_data.desde)}, {da_data.ato}).{_hoje_no_grupo(ncm, da_data)}",
                     "Troque pelo NCM correto no cadastro (veja a sugestão) e confira se a nota precisa de correção.",
                 )
             ]
@@ -141,7 +172,8 @@ def regra_ncm_tabela(ncm: str, data_nota: date | None, historico) -> list[Achado
                 "NCM_INEXISTENTE",
                 AMARELO,
                 f"O NCM {fmt_ncm(ncm)} não existe na tabela de hoje ({atual.vigente_em or fmt_data(atual.desde)}). "
-                f"A nota é de {fmt_data(data_nota)}: o código pode ter valido naquela época.",
+                f"A nota é de {fmt_data(data_nota)}: o código pode ter valido naquela época."
+                f"{_hoje_no_grupo(ncm, atual)}",
                 "Corrija o cadastro para as próximas notas (veja a sugestão).",
             )
         ]
@@ -159,6 +191,13 @@ def regra_ncm_tabela(ncm: str, data_nota: date | None, historico) -> list[Achado
     return []
 
 
+# Medidos em 08/11/2026 na amostra pública (50.000 itens de 2025-09): juntos, marcam mais 1,6% dos
+# itens; em 43% deles quase ninguém usa aquele NCM para aquela descrição (provável erro real) e em
+# menos de 5% o NCM da nota é o de sempre (provável alarme falso). Ver reports/produto_amostra_publica.md.
+LIMIAR_OUTRO_CAPITULO = 0.60
+LIMIAR_OUTRA_POSICAO = 0.75
+
+
 def regra_ncm_modelo(
     ncm: str,
     descricao: str,
@@ -167,13 +206,21 @@ def regra_ncm_modelo(
     limiar_vermelho: float,
     limiar_amarelo: float,
 ) -> list[Achado]:
-    """Compara o NCM declarado com o que o modelo lê na descrição (top-k já filtrado pela tabela)."""
+    """Compara o NCM declarado com o que o modelo lê na descrição (top-10 já filtrado pela tabela).
+
+    - vermelho: o modelo tem confiança >= limiar da auditoria (0,99) num NCM diferente;
+    - amarelo: o NCM da nota está fora dos 5 mais prováveis e o modelo tem >= 0,90;
+    - amarelo: o NCM da nota nem aparece entre os 10 mais prováveis e é de OUTRO CAPÍTULO (modelo
+      >= 0,60) ou de OUTRA POSIÇÃO de 4 dígitos (modelo >= 0,75): o caso típico do NCM copiado de
+      outro produto no cadastro.
+    """
     if not sugestoes or not _NCM_RE.match(ncm or ""):
         return []
     top1, p1 = sugestoes[0]
     if top1 == ncm:
         return []
-    no_topk = ncm in {c for c, _ in sugestoes}
+    top5 = {c for c, _ in sugestoes[:5]}
+    top10 = {c for c, _ in sugestoes[:10]}
     desc_top = tabela.curta(top1) or "sem descrição oficial"
     desc_decl = tabela.curta(ncm) or "código fora da tabela"
     if p1 >= limiar_vermelho:
@@ -183,13 +230,23 @@ def regra_ncm_modelo(
             f"O NCM da nota, {fmt_ncm(ncm)}, é: {desc_decl}."
         )
         acao = f"Confira o produto. Se for o que a descrição diz, corrija o NCM no cadastro para {fmt_ncm(top1)}."
-    elif not no_topk and p1 >= limiar_amarelo:
+    elif ncm not in top5 and p1 >= limiar_amarelo:
         nivel = AMARELO
         motivo = (
             f"O NCM {fmt_ncm(ncm)} ({desc_decl}) não aparece entre os 5 mais prováveis para esta descrição. "
             f"O mais provável é {fmt_ncm(top1)} ({desc_top}), {p1:.0%}."
         )
         acao = "Confira o produto e o NCM no cadastro."
+    elif ncm not in top10 and (
+        (p1 >= LIMIAR_OUTRO_CAPITULO and ncm[:2] != top1[:2]) or (p1 >= LIMIAR_OUTRA_POSICAO and ncm[:4] != top1[:4])
+    ):
+        nivel = AMARELO
+        onde = "outro capítulo" if ncm[:2] != top1[:2] else "outra posição"
+        motivo = (
+            f"O NCM {fmt_ncm(ncm)} ({desc_decl}) é de {onde} da tabela e nem aparece entre os 10 mais "
+            f"prováveis para esta descrição. O mais provável é {fmt_ncm(top1)} ({desc_top}), {p1:.0%}."
+        )
+        acao = "Parece NCM copiado de outro produto. Confira o cadastro."
     else:
         return []
     return [Achado("NCM_MODELO", nivel, motivo, acao, ncm_sugerido=top1)]

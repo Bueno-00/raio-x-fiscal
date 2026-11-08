@@ -29,3 +29,12 @@ baseline's **78.7% / 87.8%**; never-seen unique descriptions 48.6% / 68.9% again
 **The baseline still wins**: one epoch is not enough for the long tail (macro F1 9% vs 26.5%), so the product's
 traffic light keeps the TF-IDF + SVM model. Version 2, full mode (3 epochs, 64 tokens, 150-minute budget),
 was submitted on 2026-11-07; it only replaces the baseline if it wins on the same test month.
+
+**Second run (version 2, full mode, finished 2026-11-08 01:33 UTC).** 3 epochs, 64 tokens, 62 minutes of
+training on a T4 (~426 descriptions per second). Test month 2025-09: all items 69.5% / 86.5% top-1 / top-5
+(lookup -> BERTimbau hybrid 77.7% / **88.9%**) against the baseline's **78.7%** / 87.8%; never-seen unique
+descriptions 56.6% / **76.6%** against **60.0%** / 76.1%; macro F1 19.4% vs 26.5%. At confidence ≥ 0.99
+it flags 105 disagreements (0.02%) against the baseline's 3,580. **The baseline stays in the traffic light**
+(the rule was to switch only if BERTimbau won on never-seen descriptions, and at top-1 it still loses by
+3.4 points). It ties or wins at top-5 and makes different mistakes, so the next experiment is an ensemble.
+

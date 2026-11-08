@@ -77,3 +77,24 @@ Teste em 2025-09 (547.718 itens), mesmos cortes do baseline:
 26,5% do baseline nas nunca vistas). Por isso o semáforo do produto continua com o modelo TF-IDF + SVM.
 A versão 2, em modo completo (3 épocas, 64 tokens, orçamento de 150 min), foi enviada em 07/11/2026 ~21h30;
 ela só entra no produto se ganhar do baseline no mesmo mês de teste.
+
+## Resultado da 2ª rodada (versão 2, modo completo, terminou em 08/11/2026 01:33 UTC)
+
+3 épocas, 64 tokens, 62 min de treino numa T4 (~426 descrições por segundo; 6.171 passos), temperatura 1,1.
+Mesmo teste (2025-09, 547.718 itens) e mesmos cortes:
+
+| Corte | BERTimbau top-1 / top-5 | Híbrido lookup -> BERTimbau | Baseline (híbrido lookup -> SVM) |
+|---|---:|---:|---:|
+| todos | 69,5% / 86,5% | 77,7% / **88,9%** | **78,7%** / 87,8% |
+| únicas | 62,3% / 81,3% | 69,1% / **83,9%** | **71,2%** / 83,2% |
+| nunca vistas | 58,9% / **77,9%** | 58,9% / 77,9% | **62,1%** / 77,5% |
+| nunca vistas, únicas | 56,6% / **76,6%** | 56,6% / 76,6% | **60,0%** / 76,1% |
+
+F1 macro nas nunca vistas únicas: 19,4% (v1: 9,0%; baseline: 26,5%). Auditoria (confiança ≥ 0,99 e NCM
+declarado diferente): 105 itens (0,02%) contra 3.580 (0,65%) do baseline.
+
+**O baseline continua no semáforo.** A regra era trocar só se o BERTimbau ganhasse nas descrições nunca
+vistas, e no top-1 (o que o semáforo usa) ele ainda perde por 3,4 pontos. Ele já empata ou passa no top-5 e
+erra de um jeito diferente, por isso o próximo teste é o conjunto dos dois (média das probabilidades).
+Saída baixada em `.tmp/bertimbau-v2-saida/` (fora do git; o modelo fp16 tem 229 MB e fica privado).
+

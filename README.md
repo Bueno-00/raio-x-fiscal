@@ -18,9 +18,12 @@ uma auditoria que aponta NCMs declarados que provavelmente estão errados.
 > NCM: 3.580 alertas no mês de teste; numa inspeção manual de 60, **50 (83%)** eram NCM declarado errado
 > com a sugestão do modelo correta, e 3 (5%) eram erro do modelo.
 >
-> **Produto (07/11/2026).** Confere XML de NF-e, a planilha do cadastro ou uma descrição digitada e devolve um
-> semáforo por item com o motivo e a sugestão de NCM e CFOP. Numa amostra real de 50.000 itens de um mês
-> que o modelo não viu: **0,6% vermelho, 4,5% amarelo, 94,9% verde**, 1.629 itens por segundo em CPU.
+> **Produto (07 e 08/11/2026).** Confere XML de NF-e, a planilha do cadastro ou uma descrição digitada e devolve um
+> semáforo por item com o motivo e a sugestão de NCM e CFOP, num **app web** (`rxf app`) ou por linha de
+> comando. Numa amostra real de 50.000 itens de um mês que o modelo não viu: **0,6% vermelho, 6,0% amarelo,
+> 93,4% verde**. Nas notas de exemplo de 8 comércios (produtos reais do dado público, erros plantados com
+> gabarito): **184 de 186 erros marcados**. A correção sai no formato do Bling e do Olist (arquivo pronto) e
+> em lista para Omie, Conta Azul e Domínio.
 > Tabela NCM oficial conferida por um robô diário com histórico de versões. Tudo local.
 <!-- RESULTS_BOX_END -->
 
@@ -80,15 +83,43 @@ Nenhuma nota sai da máquina: nada de API externa, nada de nuvem. Código em `sr
 | 2. Cadastro | planilha de produtos exportada do sistema (CSV ou XLSX; reconhece a exportação do Bling) | `rxf cadastro <planilha>` | conferir o NCM **antes** de emitir |
 | 3. Pesquisa | descrição digitada ("leite condensado 395 g") | `rxf pesquisar "<texto>"` | os 3 NCMs mais prováveis, com a descrição oficial e a confiança |
 
-`rxf painel` abre as 3 portas numa página local (só em `127.0.0.1`, porta 8765).
+**App web (08/11/2026).** `rxf app` sobe as 3 portas numa página pronta para publicar (FastAPI, só em
+`127.0.0.1:8770`; o Nginx publica): enviar XML, pasta ou `.zip`, "usar notas de exemplo", planilha do
+cadastro e pesquisa, com semáforo por item, filtros por cor, empresa e checagem, e download do relatório
+(XLSX) e da correção no formato do sistema escolhido. Feita para quem visita mandar nota de verdade:
+- o envio é lido **na memória** (o app lê o corpo do pedido ele mesmo, sem o arquivo temporário do
+  servidor), conferido e descartado; sem log de acesso; o resultado fica 30 minutos na memória só para
+  baixar a planilha;
+- limites: 25 MB e 3.000 XML por envio, 30.000 itens, 12 envios por IP por hora e 40 por dia, uma
+  conferência por vez; cabeçalhos de segurança (CSP só do próprio site, sem iframe, sem referrer);
+- o chat "Pergunte ao Simples" (projeto à parte) só aparece se o pacote `pergunte_ao_simples` estiver
+  instalado e `CHAT_ENV_FILE` apontar para um arquivo que existe; recebe o resumo da conferência sem
+  nomes nem CNPJ.
+
+`pip install -e ".[app]"` instala o FastAPI e o Uvicorn. `rxf painel` (a página local antiga, porta 8765)
+continua lá para uso só na máquina.
+
+**Notas de exemplo de 8 comércios (08/11/2026).** `rxf exemplos-lojas` gera
+`exemplos/lojas/notas-exemplo-raio-x.zip`: mercado, autopeças, farmácia, material de construção, loja de
+roupas, restaurante, papelaria e informática, em 8 estados, 132 notas (NF-e e NFC-e, leiaute 4.00, em
+homologação) e 667 itens. As empresas são inventadas; **os produtos são descrições reais do dado
+público**, com o NCM que aparece em 85% ou mais das vezes (`scripts/extrair_catalogo_exemplos.py` ->
+`src/raio_x_fiscal/seeds/catalogo_exemplos.csv`). Os erros foram plantados como nascem no escritório
+(a maioria no cadastro, repetindo em toda nota com o produto): NCM copiado de outro produto, código
+antigo, zero da frente comido pelo Excel, GTIN errado, CST do regime normal no Simples, CFOP 5 para fora
+do estado e 6 dentro, NCM diferente só numa nota, CFOP de compra numa venda, nota cancelada. O zip traz
+o **gabarito** item por item, a regra do escritório e o cadastro de cada empresa (o do mercado no
+formato do Bling). Resultado em [reports/exemplos_lojas.md](reports/exemplos_lojas.md): **184 de 186
+erros marcados**; o que passou foi um chá com o NCM de "preparação alimentícia", que o modelo tinha como
+2ª opção.
 
 **Checagens por item** (cada uma é uma regra simples, o modelo entra onde a regra não alcança):
 
 | Checagem | Nível | Como decide |
 |---|---|---|
-| NCM não combina com a descrição | vermelho / amarelo | modelo da fase 1: vermelho com confiança ≥ 0,99 e NCM diferente (o limiar da auditoria; 50 de 60 alertas inspecionados à mão eram erro real); amarelo com ≥ 0,90 e o NCM da nota fora dos 5 mais prováveis. Sugestões só com códigos que existem na tabela oficial vigente |
-| NCM inexistente ou fora de vigência | vermelho / amarelo | tabela oficial do Siscomex **na data da nota** (vermelho); para nota mais antiga que a primeira tabela guardada, compara com a de hoje (amarelo) |
-| NCM vazio ou com menos de 8 dígitos | vermelho | formato (item de serviço com ISSQN e NCM 00 é aceito) |
+| NCM não combina com a descrição | vermelho / amarelo | modelo da fase 1: vermelho com confiança ≥ 0,99 e NCM diferente (o limiar da auditoria; 50 de 60 alertas inspecionados à mão eram erro real); amarelo com ≥ 0,90 e o NCM da nota fora dos 5 mais prováveis; amarelo também quando o NCM da nota nem aparece entre os 10 mais prováveis e é de outro capítulo (≥ 0,60) ou de outra posição de 4 dígitos (≥ 0,75), o caso do NCM copiado de outro produto (regra de 08/11/2026, medida na amostra pública: +1,6% de itens marcados, 43% com NCM que quase ninguém usa para aquela descrição, menos de 5% com o NCM de sempre). Sugestões só com códigos que existem na tabela oficial vigente |
+| NCM inexistente ou fora de vigência | vermelho / amarelo | tabela oficial do Siscomex **na data da nota** (vermelho); para nota mais antiga que a primeira tabela guardada, compara com a de hoje (amarelo). Mostra os códigos que existem hoje no mesmo grupo e sugere, entre eles, o que o modelo prefere |
+| NCM vazio ou com menos de 8 dígitos | vermelho | formato (item de serviço com ISSQN e NCM 00 é aceito); com 7 dígitos, se o código com o zero na frente existe, avisa que o Excel comeu o zero e sugere o código certo |
 | CFOP x estados | amarelo | 5.xxx numa nota para outro estado, 6.xxx dentro do estado, 7.xxx sem exterior; sugere o CFOP espelho. **Venda presencial com 5.xxx fica verde sozinha.** Nunca vermelho: pode ser de propósito |
 | CFOP de entrada em nota de saída (ou o contrário) | vermelho | primeiro dígito x `tpNF` |
 | CST x regime | vermelho | empresa do Simples (CRT 1 ou 4) com CST de regime normal, ou o contrário com CSOSN |
@@ -115,37 +146,37 @@ o servidor; a linha sugerida (todo dia às 6h) é:
 0 6 * * * cd /caminho/raio-x-fiscal && .venv/bin/rxf ncm-atualizar >> data/ncm/cron.log 2>&1
 ```
 
-**Medido** (07/11/2026):
+**Medido** (07 e 08/11/2026):
 
-- **Notas de exemplo** (`exemplos/`, XML sintéticos com erros plantados, 3 empresas fictícias, um `.zip`
-  e um cancelamento): 15 notas, 41 itens: 7 vermelho, 7 amarelo, 27 verde, 2 alertas aceitos pela regra
-  do escritório. Cada erro plantado é pego pela regra certa (testes em `tests/test_produto.py`).
+- **Notas de exemplo dos 8 comércios** (acima): 132 notas, 667 itens, 186 erros plantados, **184 marcados**.
+- **Notas de exemplo mínimas** (`exemplos/`, 3 empresas fictícias, usadas nos testes): 15 notas, 41 itens;
+  cada erro plantado é pego pela regra certa (`tests/test_produto.py`).
 - **Amostra real do dado público**, 50.000 itens (13.361 notas) de 2025-09, mês que o modelo nunca viu:
-  **0,6% vermelho, 4,5% amarelo, 94,9% verde**; 1.629 itens por segundo em CPU de 2 núcleos. Ou seja:
-  de cada 1.000 itens, a pessoa olha 6 com atenção. Detalhes em
-  [reports/produto_amostra_publica.md](reports/produto_amostra_publica.md).
-- 84 testes passando (26 do produto), `ruff` limpo.
+  **0,6% vermelho, 6,0% amarelo, 93,4% verde** (antes da regra nova de 08/11: 4,5% amarelo); 1.629 itens
+  por segundo em CPU de 2 núcleos com o servidor livre. De cada 1.000 itens, a pessoa olha 6 com atenção
+  e confere 60. Detalhes em [reports/produto_amostra_publica.md](reports/produto_amostra_publica.md).
+- 97 testes passando (26 do produto, 12 do app, dos formatos e das notas de exemplo), `ruff` limpo.
 
 **Precisa de gente para revisar tudo?** Não. O modelo e as regras fazem a triagem; a pessoa olha o
 vermelho (0,6% dos itens na amostra) e decide; o amarelo que for de propósito vira regra do
 escritório. O acerto do modelo é medido sozinho todo mês: treina com os meses anteriores e mede num mês
 que ele não viu (`rxf avaliar-publico --mes AAAAMM`), sem ninguém conferindo item por item.
 
-**Planilha corrigida de volta no sistema.** A planilha de correção tem a coluna "NCM aprovado": a
-pessoa troca só onde concorda, e `rxf cadastro-exportar` devolve **só as linhas que mudaram, no layout
-original**.
-- **Bling: dá.** A ajuda oficial (acessada em 07/11/2026) diz que dá para exportar, editar o NCM e
-  importar de volta em "Importar e Atualizar produtos" com a operação "Atualizar"; a chave é a coluna
-  **ID**; célula apagada apaga o dado no cadastro; no máximo 1.000 produtos por arquivo. Por isso a
-  exportação mantém todas as colunas e o ID, mexe só no NCM e divide em partes de 1.000
-  ([Como editar e atualizar meus produtos por planilha](https://ajuda.bling.com.br/hc/pt-br/articles/360060827554),
-  [Cadastrar produtos simples por planilha](https://ajuda.bling.com.br/hc/pt-br/articles/360062630653)).
-- **Domínio (Thomson Reuters): não achei leiaute público** de importação de cadastro de produtos. O que
-  a página oficial de atualizações diz (02/12/2024) é que o Domínio **compara o NCM do produto com o
-  NCM da nota e cria uma nova vigência sozinho** quando eles diferem
-  ([dominiosistemas.com.br/atualizacoes](https://www.dominiosistemas.com.br/atualizacoes)). Então o
-  lugar certo para corrigir é **antes de importar** (a porta 1) e no sistema que emite a nota; o
-  relatório entrega a lista para o contador.
+**Planilha corrigida de volta no sistema** (ajudas oficiais acessadas em 08/11/2026). A pessoa aprova
+as trocas (no app, marcando as sugestões; na linha de comando, na coluna "NCM aprovado") e o Raio-X
+entrega o arquivo no jeito que cada sistema aceita. Código em `src/raio_x_fiscal/produto/formatos.py`.
+
+| Sistema | Atualiza NCM por planilha? | O que o Raio-X entrega |
+|---|---|---|
+| **Bling** | sim: "Importar e Atualizar produtos", operação Atualizar; chave **ID**; célula apagada apaga o dado; até 1.000 por arquivo; o modelo é CSV | **arquivo pronto**: o mesmo CSV que você exportou, só as linhas aprovadas, só o NCM trocado, em partes de 1.000 ([ajuda](https://ajuda.bling.com.br/hc/pt-br/articles/360060827554), [modelo](https://ajuda.bling.com.br/hc/pt-br/articles/360062630653)) |
+| **Olist ERP** (antigo Tiny) | sim: "Importar produtos de uma planilha" no modelo oficial, sem mudar nome nem ordem das colunas; chave **ID** (ou SKU); recomenda até 500 por arquivo | **arquivo pronto** no layout da sua exportação, em partes de 500 ([ajuda](https://ajuda.olist.com/produtos/importar-planilha-de-produtos)) |
+| **Omie** | sim, mas só no modelo oficial protegido por senha; **célula vazia apaga o dado**; a chave não é publicada (provável "Código do Produto") | lista de-para (código e NCM novo) para colar no modelo, com o aviso ([ajuda](https://ajuda.omie.com.br/pt-BR/articles/6590176-cadastrando-produtos-em-lote-via-planilha)) |
+| **Conta Azul** | **não**: a importação só cadastra produto novo; NCM se edita produto por produto | lista para corrigir um a um ([ajuda](https://ajuda.contaazul.com/hc/pt-br/articles/49003711419149-A%C3%A7%C3%B5es-em-lote-o-que-%C3%A9-poss%C3%ADvel-fazer-em-lote-na-Conta-Azul-Pro)) |
+| **Domínio** (Thomson Reuters) | **sem leiaute público** de importação de produtos (a Central de Soluções só abre para clientes); dentro do sistema há o utilitário "Alterar Produtos" em lote (solução 172) | lista para esse utilitário ou para pedir o leiaute ao suporte. E o Domínio **cria sozinho uma nova vigência de NCM** quando o XML difere do cadastro ([atualizações](https://www.dominiosistemas.com.br/atualizacoes)), por isso o lugar certo para corrigir é **antes de importar** (porta 1) |
+
+A lista (XLSX) traz uma aba "Como usar" com o passo a passo do sistema escolhido e as fontes. Nas notas
+(porta 1) o ID do produto no sistema não vem no XML, então dali sai sempre a lista; o arquivo pronto do
+Bling e do Olist sai pela porta 2, a partir da planilha exportada do próprio sistema.
 
 **Notas reais, só local.** `entrada-local/` e `saida-local/` estão no `.gitignore`. `make auditar`
 confere o que estiver em `entrada-local/` e grava `saida-local/<data-hora>/relatorio.html` e
@@ -333,6 +364,10 @@ make test && make lint               # pytest offline (fixtures pequenas) e ruff
 
 # inferência
 .venv/bin/python -m raio_x_fiscal.ml.predict "ARROZ TIPO 1" "Vidro temperado 6mm" --k 3
+
+# app web (127.0.0.1:8770; para publicar, um Nginx na frente) e as notas de exemplo dos 8 comércios
+.venv/bin/pip install -e ".[app]" && .venv/bin/rxf app
+.venv/bin/rxf exemplos-lojas         # exemplos/lojas/notas-exemplo-raio-x.zip + reports/exemplos_lojas.md
 ```
 
 Variáveis de ambiente opcionais: `RXF_DATA_DIR`, `RXF_MODELS_DIR`, `RXF_DUCKDB_MEMORY` (padrão
@@ -405,11 +440,23 @@ raio-x-fiscal/
 
 **Produto, próximos passos.** CFOP de entrada sugerido a partir do histórico do escritório (o "de-para"
 que hoje é manual); `cClassTrib` x NCM depois de 2027 (reforma tributária); trocar o modelo do semáforo
-pelo BERTimbau da fase 2 se ele ganhar no mês de teste; o chat de dúvidas dentro do relatório (projeto A).
+por um conjunto TF-IDF + BERTimbau (sozinho, o BERTimbau ainda perde; ver abaixo); o chat de dúvidas
+dentro do app (projeto A, o espaço já está pronto).
 
-**FASE 2, 1ª rodada do BERTimbau (07/11/2026).** Modo rápido (1 época, 16 min numa T4 do Kaggle, privado):
-48,6% / 68,9% (top-1 / top-5) nas descrições nunca vistas, contra 60,0% / 76,1% do baseline. **O baseline
-ainda ganha**; a rodada completa (3 épocas) foi enviada. Detalhes em `publicar/kaggle/bertimbau/README.md`.
+**FASE 2, BERTimbau no Kaggle (07 e 08/11/2026, privado).** Mesmo mês de teste (2025-09, 547.718 itens) e
+mesmos cortes do baseline:
+
+| Rodada | Todos os itens (top-1 / top-5) | Nunca vistas, únicas (top-1 / top-5) | F1 macro (nunca vistas) |
+|---|---:|---:|---:|
+| Baseline TF-IDF + SVM (híbrido com lookup) | **78,7%** / 87,8% | **60,0%** / 76,1% | **26,5%** |
+| BERTimbau v1, rápido (1 época, 16 min de T4) | 61,5% / 79,4% (híbrido 75,1% / 85,8%) | 48,6% / 68,9% | 9,0% |
+| BERTimbau v2, completo (3 épocas, 64 tokens, 62 min de T4) | 69,5% / 86,5% (híbrido 77,7% / **88,9%**) | 56,6% / **76,6%** | 19,4% |
+
+**O baseline ainda ganha no que o semáforo usa** (o 1º NCM nas descrições nunca vistas: 60,0% contra
+56,6%), então o semáforo continua com ele. O BERTimbau v2 já empata ou passa no top-5 (76,6% contra 76,1%
+nas nunca vistas; 88,9% contra 87,8% no híbrido) e é mais cauteloso: com confiança ≥ 0,99 ele aponta só
+105 divergências no mês (0,02%), contra 3.580 do baseline. Próximo passo: juntar os dois (média das
+probabilidades) e medir de novo. Detalhes em `publicar/kaggle/bertimbau/README.md`.
 
 **FASE 2: modelo publicado.** Fine-tuning de um encoder PT-BR (BERTimbau base ou similar) no Kaggle
 (GPU gratuita) sobre o dataset anonimizado desta fase, com o mesmo protocolo de split e os mesmos
@@ -426,7 +473,9 @@ WhatsApp (12 personas, cliente simulado, juiz pinado, custo por papel; repositó
 
 ## Testes e lint
 
-`make test` roda 84 testes offline em segundos (26 do produto: leitura de XML, pasta e zip, recusa de XML
+`make test` roda 97 testes offline (12 do app web, dos formatos de importação e das notas de exemplo
+dos 8 comércios: envio do zip sem passar pelo disco, limite por IP, tamanho máximo, CSV do Bling só com as
+linhas aprovadas, partes de 500 do Olist, chat que só monta com pacote e arquivo de ambiente; 26 do produto: leitura de XML, pasta e zip, recusa de XML
 perigoso, cada regra com caso certo e errado, regra do escritório, robô da tabela NCM sem internet,
 modelo minúsculo para NCM x descrição e pesquisa, relatório que escapa o texto da nota, ida e volta da
 planilha do Bling e o painel local); além disso: parse do CSV latin-1 e dos decimais BR, contrato de
