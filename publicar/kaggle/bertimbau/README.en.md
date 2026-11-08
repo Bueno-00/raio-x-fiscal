@@ -22,3 +22,10 @@ training budget, ~40 min end to end. Full mode: 3 epochs, 64 tokens, 150 minutes
 **Outputs** (`/kaggle/working`): `resultados_bertimbau.md`, `metricas_bertimbau.json`,
 `divergencias_confiantes.csv` and the fp16 model in `modelo-bertimbau-ncm/` (~220 MB). Commands are in the
 Portuguese README.
+
+**First run (version 1, fast mode, 2026-11-07).** 1 epoch, 48 tokens, 16 minutes of training on a T4. Test
+month 2025-09: all items 61.5% / 79.4% top-1 / top-5 (lookup -> BERTimbau hybrid 75.1% / 85.8%) against the
+baseline's **78.7% / 87.8%**; never-seen unique descriptions 48.6% / 68.9% against **60.0% / 76.1%**.
+**The baseline still wins**: one epoch is not enough for the long tail (macro F1 9% vs 26.5%), so the product's
+traffic light keeps the TF-IDF + SVM model. Version 2, full mode (3 epochs, 64 tokens, 150-minute budget),
+was submitted on 2026-11-07; it only replaces the baseline if it wins on the same test month.

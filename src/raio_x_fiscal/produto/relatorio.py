@@ -127,7 +127,7 @@ details.nota[open]>summary{border-bottom:1px solid var(--line2)}
 .dot.vermelho{background:var(--vm)}.dot.amarelo{background:#e0a100}.dot.verde{background:var(--vd)}
 table.itens{table-layout:fixed}
 table.itens th,table.itens td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line2);vertical-align:top;font-size:13px;overflow-wrap:anywhere}
-table.itens col.c-sem{width:128px}table.itens col.c-it{width:52px}table.itens col.c-prod{width:20%}table.itens col.c-ncm{width:17%}
+table.itens col.c-sem{width:128px}table.itens col.c-it{width:64px}table.itens col.c-prod{width:20%}table.itens col.c-ncm{width:17%}
 table.itens col.c-cfop{width:92px}table.itens col.c-sug{width:17%}
 table.itens th{background:#fafafa;color:var(--muted);font-weight:600;font-size:12px}
 table.itens tr:last-child td{border-bottom:0}

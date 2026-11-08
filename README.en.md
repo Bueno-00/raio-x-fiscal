@@ -424,6 +424,10 @@ raio-x-fiscal/
 manual today); `cClassTrib` vs NCM after 2027 (tax reform); swap the traffic-light model for the phase 2
 BERTimbau if it wins on the test month; the Q&A chat inside the report (project A).
 
+**PHASE 2, first BERTimbau run (2026-11-07).** Fast mode (1 epoch, 16 minutes on a Kaggle T4, private):
+48.6% / 68.9% (top-1 / top-5) on never-seen descriptions, against the baseline's 60.0% / 76.1%. **The
+baseline still wins**; the full run (3 epochs) has been submitted. Details in `publicar/kaggle/bertimbau/README.en.md`.
+
 **PHASE 2: a published model.** Fine-tuning a Portuguese encoder (BERTimbau base or similar) on Kaggle
 (free GPU) over this phase's anonymized dataset, with the same split protocol and the same four
 subsets, for a direct comparison with the baseline. Deliverables: dataset + notebook on Kaggle, model +

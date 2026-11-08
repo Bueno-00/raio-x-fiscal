@@ -62,3 +62,18 @@ set -a; . ./.env; set +a
 O teste de fumaça local rodou de ponta a ponta em 07/11/2026 (amostra de 87 mil itens, modelo
 `hf-internal-testing/tiny-random-bert`, CPU): carga, dedup, cortes, treino, calibração, predição,
 tabela e arquivos de saída.
+
+## Resultado da 1ª rodada (versão 1, modo rápido, 07/11/2026)
+
+1 época, 48 tokens, 16 min de treino numa T4 (~550 descrições por segundo), 526.441 descrições, 6.589 NCMs.
+Teste em 2025-09 (547.718 itens), mesmos cortes do baseline:
+
+| Corte | BERTimbau top-1 / top-5 | Híbrido lookup -> BERTimbau | Baseline (híbrido lookup -> SVM) |
+|---|---:|---:|---:|
+| todos | 61,5% / 79,4% | 75,1% / 85,8% | **78,7% / 87,8%** |
+| nunca vistas, únicas | 48,6% / 68,9% | 48,6% / 68,9% | **60,0% / 76,1%** |
+
+**O baseline ainda ganha.** Com uma época só, o BERTimbau não aprendeu a cauda longa (F1 macro de 9% contra
+26,5% do baseline nas nunca vistas). Por isso o semáforo do produto continua com o modelo TF-IDF + SVM.
+A versão 2, em modo completo (3 épocas, 64 tokens, orçamento de 150 min), foi enviada em 07/11/2026 ~21h30;
+ela só entra no produto se ganhar do baseline no mesmo mês de teste.

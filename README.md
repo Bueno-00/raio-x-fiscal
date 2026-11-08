@@ -407,6 +407,10 @@ raio-x-fiscal/
 que hoje é manual); `cClassTrib` x NCM depois de 2027 (reforma tributária); trocar o modelo do semáforo
 pelo BERTimbau da fase 2 se ele ganhar no mês de teste; o chat de dúvidas dentro do relatório (projeto A).
 
+**FASE 2, 1ª rodada do BERTimbau (07/11/2026).** Modo rápido (1 época, 16 min numa T4 do Kaggle, privado):
+48,6% / 68,9% (top-1 / top-5) nas descrições nunca vistas, contra 60,0% / 76,1% do baseline. **O baseline
+ainda ganha**; a rodada completa (3 épocas) foi enviada. Detalhes em `publicar/kaggle/bertimbau/README.md`.
+
 **FASE 2: modelo publicado.** Fine-tuning de um encoder PT-BR (BERTimbau base ou similar) no Kaggle
 (GPU gratuita) sobre o dataset anonimizado desta fase, com o mesmo protocolo de split e os mesmos
 quatro subconjuntos, para comparar diretamente com o baseline. Entregas: dataset + notebook no Kaggle,
