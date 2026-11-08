@@ -97,7 +97,8 @@ def test_pagina_e_seguranca(cliente):
     r = cliente.get("/")
     assert r.status_code == 200 and "Raio-X" in r.text
     csp = r.headers["content-security-policy"]
-    assert "default-src 'self'" in csp and "frame-ancestors 'none'" in csp
+    assert "default-src 'self'" in csp and "frame-ancestors 'none'" in csp and "frame-src 'none'" in csp
+    assert cliente.head("/").status_code == 200
     assert r.headers["x-content-type-options"] == "nosniff"
     e = cliente.get("/api/estado").json()
     assert e["chat"] == {"ativo": False} and {s["id"] for s in e["sistemas"]} >= {"bling", "olist", "omie"}

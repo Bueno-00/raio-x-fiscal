@@ -384,9 +384,10 @@ def criar_app(ctx: motor.Contexto | None = None, *, com_modelo: bool = True, com
     vez = threading.BoundedSemaphore(1)
     chat = montar_chat(app) if com_chat else {"ativo": False}
     extra = os.environ.get("RAIOX_CSP_EXTRA", "").strip()  # ex.: https://challenges.cloudflare.com (captcha do chat)
+    frames = extra or "'none'"
     csp = (
         "default-src 'self'; img-src 'self' data:; style-src 'self'; font-src 'self'; "
-        f"script-src 'self' {extra}; connect-src 'self' {extra}; frame-src {extra or 'none'}; "
+        f"script-src 'self' {extra}; connect-src 'self' {extra}; frame-src {frames}; "
         "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
     )
 
@@ -466,11 +467,11 @@ def criar_app(ctx: motor.Contexto | None = None, *, com_modelo: bool = True, com
     async def erro_http(_request: Request, exc: HTTPException):
         return JSONResponse({"erro": exc.detail}, status_code=exc.status_code)
 
-    @app.get("/", include_in_schema=False)
+    @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
     def inicio():
         return FileResponse(STATIC / "index.html", media_type="text/html", headers={"Cache-Control": "no-cache"})
 
-    @app.get("/api/saude")
+    @app.api_route("/api/saude", methods=["GET", "HEAD"])
     def saude():
         return {"ok": True, "modelo": ctx.classificador is not None}
 
