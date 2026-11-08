@@ -25,6 +25,11 @@ one, and it drives the tax rates applied to that item.
 > 8-digit NCM in the test month and **60.0% / 76.1%** (top-1 / top-5) on never-seen descriptions. NCM
 > audit: 3,580 alerts in the test month; in a manual inspection of 60, **50 (83%)** were a wrong declared
 > NCM with the model's suggestion correct, and 3 (5%) were model errors.
+>
+> **Product (2026-11-07).** Checks NF-e XML, the product register spreadsheet or a typed description and
+> returns a traffic light per line item with the reason and the suggested NCM and CFOP. On a real sample of
+> 50,000 items from a month the model never saw: **0.6% red, 4.5% yellow, 94.9% green**, 1,629 items per
+> second on CPU. The official NCM table is checked by a daily job with version history. Everything local.
 <!-- RESULTS_BOX_END -->
 
 ---
@@ -68,6 +73,96 @@ third parties, thousands of hierarchical classes, and a real cost when the class
    validated with Airflow 2.10.5.
 6. **An anonymized dataset ready to publish** in PHASE 2 (Kaggle / Hugging Face), with a dataset card
    ([docs/DATASET_CARD.en.md](docs/DATASET_CARD.en.md)).
+
+## The product: checking invoices before they are imported (new, 2026-11-07)
+
+On top of the pipeline and the model, the repository now has a **product that runs on the user's own
+machine**: it takes the invoices, the product register or a typed description, and returns a
+**traffic light per line item** (green ok, yellow check, red probable error) with **the reason in
+plain Portuguese, what to do, and the suggested NCM and CFOP**. The output is an HTML report (to read)
+and an XLSX spreadsheet (to work on). No invoice leaves the machine: no external API, no cloud. Code in
+`src/raio_x_fiscal/produto/`.
+
+**Three entry points, one engine:**
+
+| Entry point | Input | Command | What for |
+|---|---|---|---|
+| 1. Invoices (main) | NF-e/NFC-e XML: loose files, a folder (one subfolder per company) or a `.zip` | `rxf auditar <folder>` | check the month's invoices before importing them into the accounting system |
+| 2. Product register | product spreadsheet exported from the ERP (CSV or XLSX; recognizes the Bling export) | `rxf cadastro <sheet>` | check the NCM **before** issuing invoices |
+| 3. Search | a typed description ("leite condensado 395 g") | `rxf pesquisar "<text>"` | the 3 most likely NCMs, with the official description and the confidence |
+
+`rxf painel` serves the three entry points on a local page (bound to `127.0.0.1` only, port 8765).
+
+**Checks per line item** (each one is a simple rule; the model covers what a rule cannot):
+
+| Check | Level | How it decides |
+|---|---|---|
+| NCM does not match the description | red / yellow | phase 1 model: red at confidence ≥ 0.99 with a different NCM (the audit threshold; 50 of 60 hand-inspected alerts were real errors); yellow at ≥ 0.90 with the declared NCM outside the top 5. Suggestions only use codes that exist in the current official table |
+| NCM does not exist or is out of force | red / yellow | official Siscomex table **on the invoice date** (red); for invoices older than the first stored table, compares with today's (yellow) |
+| NCM empty or shorter than 8 digits | red | format (a service item with ISSQN and NCM 00 is accepted) |
+| CFOP vs states | yellow | an in-state CFOP (5.xxx) on an interstate invoice, 6.xxx within one state, 7.xxx without a foreign buyer; suggests the mirror CFOP. **An in-person sale with 5.xxx turns green on its own.** Never red: it may be on purpose |
+| Inbound CFOP on an outbound invoice (or the reverse) | red | first digit vs `tpNF` |
+| CST vs tax regime | red | a Simples Nacional company (CRT 1 or 4) using a regular-regime CST, or the reverse with CSOSN |
+| Same product with different NCMs | yellow | same issuer product code or same GTIN with different NCMs across the folder |
+| Invoice vs register | yellow | with `--cadastro`, the invoice NCM differs from the register NCM (by GTIN or code) |
+| Invalid GTIN | yellow | length and GS1 check digit |
+| Cancelled invoice | yellow | a cancellation event (110111) in the same folder: "do not import" |
+
+**Office rules.** Sometimes the accounting office uses a CFOP on purpose. A plain CSV
+(`cnpj_empresa;regra;cfop;ncm;codigo_produto;motivo`, empty = any) lists what is accepted per company;
+the alert stays in the report but turns green with the reason, so reviewers are not worn down. A
+`regras-do-escritorio.csv` inside the invoice folder is picked up automatically.
+
+**An always up-to-date NCM table.** `rxf ncm-atualizar` downloads the official table from
+[Portal Único Siscomex](https://portalunico.siscomex.gov.br/classif/api/publico/nomenclatura/download/json?perfil=PUBLICO),
+hashes its content (ignoring the daily "Vigente em" stamp) and compares it with the last stored
+version: if it changed, the new version is stored with its date in `data/ncm/versoes/`; if not, a
+"sem mudança" (no change) line is written to `data/ncm/registro.csv` as proof that it ran. The
+official file only carries what is in force today, so the history is kept here, and the "NCM on the
+invoice date" check uses the right version. A copy from 2026-11-07 ships with the package so it works
+right after `git clone`. Scheduling is left to whoever runs the server; the suggested line (every day
+at 6 am) is:
+
+```
+0 6 * * * cd /path/raio-x-fiscal && .venv/bin/rxf ncm-atualizar >> data/ncm/cron.log 2>&1
+```
+
+**Measured** (2026-11-07):
+
+- **Example invoices** (`exemplos/`, synthetic XML with planted errors, 3 fictitious companies, one
+  `.zip` and one cancellation): 15 invoices, 41 items: 7 red, 7 yellow, 27 green, 2 alerts accepted by
+  the office rules. Every planted error is caught by the right rule (tests in `tests/test_produto.py`).
+- **Real sample of the public data**, 50,000 items (13,361 invoices) from 2025-09, a month the model
+  never saw: **0.6% red, 4.5% yellow, 94.9% green**; 1,629 items per second on a 2-core CPU. In other
+  words, out of every 1,000 items a person looks closely at 6. Details in
+  [reports/produto_amostra_publica.md](reports/produto_amostra_publica.md) (Portuguese).
+- 84 tests passing (26 for the product), `ruff` clean.
+
+**Does someone have to review everything?** No. The model and the rules do the triage; a person looks
+at the red items (0.6% in the sample) and decides; yellow items that are intentional become office
+rules. The model's accuracy is measured automatically every month: train on the previous months and
+measure on a month it has not seen (`rxf avaliar-publico --mes AAAAMM`), with nobody checking item by
+item.
+
+**Sending the corrected register back to the ERP.** The correction sheet has an "approved NCM" column:
+the person changes only what they agree with, and `rxf cadastro-exportar` returns **only the changed
+rows, in the original layout**.
+- **Bling: yes.** Bling's official help (accessed 2026-11-07) says you can export, edit the NCM and
+  import back through "Importar e Atualizar produtos" with the "Atualizar" (update) operation; the key
+  is the **ID** column; an emptied cell erases that field in the register; at most 1,000 products per
+  file. So the export keeps every column and the ID, only touches the NCM, and splits into parts of
+  1,000 ([how to edit and update products by spreadsheet](https://ajuda.bling.com.br/hc/pt-br/articles/360060827554),
+  [registering simple products by spreadsheet](https://ajuda.bling.com.br/hc/pt-br/articles/360062630653)).
+- **Domínio (Thomson Reuters): no public import layout found** for the product register. What the
+  official release notes say (2024-12-02) is that Domínio **compares the product's NCM with the NCM on
+  the invoice and creates a new validity period on its own** when they differ
+  ([dominiosistemas.com.br/atualizacoes](https://www.dominiosistemas.com.br/atualizacoes)). So the
+  right place to fix it is **before importing** (entry point 1) and in the system that issues the
+  invoice; the report hands the list to the accountant.
+
+**Real invoices stay local.** `entrada-local/` and `saida-local/` are in `.gitignore`. `make auditar`
+checks whatever is in `entrada-local/` and writes `saida-local/<date-time>/relatorio.html` and
+`relatorio.xlsx`. Client invoices never go to git, Kaggle or any external API.
 
 ## Architecture
 
@@ -290,6 +385,9 @@ raio-x-fiscal/
 │   │   ├── audit.py          # NCM alerts + sample for inspection
 │   │   └── predict.py        # inference from the CLI / NcmPredictor class
 │   ├── publish/dataset.py    # anonymized dataset for Kaggle/HF
+│   ├── produto/              # the product: nfe.py (XML), regras.py (rules), motor.py (engine), cadastro.py
+│   │                         #   (register/Bling), ncm_tabela.py (official table + daily job), relatorio.py
+│   │                         #   (HTML/XLSX), servidor.py (127.0.0.1 panel), avaliacao.py (public sample)
 │   └── seeds/                # NCM chapters (97) and states (UF)
 ├── dags/raio_x_fiscal_dag.py # Airflow (TaskFlow, dynamic mapping per month)
 ├── airflow/docker-compose.yml
@@ -322,6 +420,10 @@ raio-x-fiscal/
 
 ## Roadmap
 
+**Product, next steps.** Suggest the inbound CFOP from the office's own history (the mapping that is
+manual today); `cClassTrib` vs NCM after 2027 (tax reform); swap the traffic-light model for the phase 2
+BERTimbau if it wins on the test month; the Q&A chat inside the report (project A).
+
 **PHASE 2: a published model.** Fine-tuning a Portuguese encoder (BERTimbau base or similar) on Kaggle
 (free GPU) over this phase's anonymized dataset, with the same split protocol and the same four
 subsets, for a direct comparison with the baseline. Deliverables: dataset + notebook on Kaggle, model +
@@ -338,7 +440,10 @@ the API key stays on the server only.
 
 ## Tests and lint
 
-`make test` runs 50+ offline tests in seconds: parsing of the latin-1 CSV and Brazilian decimals,
+`make test` runs 84 offline tests in seconds (26 for the product: XML, folder and zip reading, refusal of
+unsafe XML, every rule with a right and a wrong case, office rules, the NCM table job without internet, a
+tiny model for NCM-vs-description and search, a report that escapes invoice text, the Bling spreadsheet
+round trip and the local panel); besides that: parsing of the latin-1 CSV and Brazilian decimals,
 schema contract (drift fails), normalization rules in Python and SQL (parity), rejects and dedup,
 bronze/silver/gold idempotency, expectations with the known inconsistencies of the fixture, CPF
 masking, a leakage-free split, the hierarchical model (shapes, probabilities, calibration), inference

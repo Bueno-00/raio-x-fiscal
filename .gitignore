@@ -26,3 +26,7 @@ airflow/.env
 # temporarios
 .tmp/
 *.part
+
+# notas reais e relatórios do produto: NUNCA vão para o git
+entrada-local/
+saida-local/

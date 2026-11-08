@@ -1,0 +1,3 @@
+# Regra do escritório (EXEMPLO): o que está certo de propósito. Vazio = qualquer.
+cnpj_empresa;regra;cfop;ncm;codigo_produto;motivo
+11222333000181;CFOP_UF;5102;;;Venda no balcão para cliente de outro estado (confirmado com a loja)

@@ -4,6 +4,15 @@ rxf pipeline --meses 202504-202509      # download -> bronze -> silver -> qualit
 rxf bronze --meses 202509                # one layer, one or more months
 rxf ml-dataset / ml-train / ml-audit     # baseline descricao -> NCM
 rxf publish                              # anonymised dataset + card for Kaggle/HF
+
+Produto (as 3 portas do Raio-X; tudo local, nada sai da máquina):
+rxf auditar entrada-local/               # porta 1: XML (pasta, .zip ou arquivos) -> relatório HTML + XLSX
+rxf cadastro planilha.csv                # porta 2: cadastro de produtos (ex.: exportação do Bling)
+rxf cadastro-exportar correcao.xlsx      # devolve só as linhas aprovadas, no layout original
+rxf pesquisar "leite condensado 395 g"   # porta 3: os 3 NCMs mais prováveis
+rxf ncm-atualizar                        # robô da tabela NCM oficial (rodar 1x por dia)
+rxf exemplos                             # gera as notas sintéticas de exemplo
+rxf painel                               # página local em http://127.0.0.1:8765
 """
 
 from __future__ import annotations
@@ -84,7 +93,172 @@ def build_parser() -> argparse.ArgumentParser:
     au.add_argument("--amostra", type=int, default=40, help="alertas para inspecao manual")
 
     sub.add_parser("publish", help="dataset anonimizado + dataset card em data/publish/")
+
+    a = sub.add_parser("auditar", help="porta 1: confere XML de NF-e (pasta, .zip ou arquivo)")
+    a.add_argument("entrada", help="pasta, .zip ou .xml (uma subpasta por empresa)")
+    a.add_argument("--saida", default=None, help="pasta do relatório (padrão: saida-local/<data-hora>)")
+    a.add_argument("--regras", default=None, help="CSV da regra do escritório (exceções aceitas)")
+    a.add_argument("--cadastro", default=None, help="planilha do cadastro para comparar nota x cadastro")
+    a.add_argument("--sem-modelo", action="store_true", help="só as regras (sem o modelo de NCM)")
+
+    c = sub.add_parser("cadastro", help="porta 2: confere a planilha do cadastro de produtos")
+    c.add_argument("planilha")
+    c.add_argument("--saida", default=None)
+    c.add_argument("--sem-modelo", action="store_true")
+
+    ce = sub.add_parser("cadastro-exportar", help="gera o arquivo para importar com os NCMs aprovados")
+    ce.add_argument("correcao", help="a planilha de correção revisada (aba 'Correção')")
+    ce.add_argument("--saida", default=None, help="pasta de saída (padrão: a mesma da planilha)")
+
+    q = sub.add_parser("pesquisar", help="porta 3: descrição de produto -> NCMs mais prováveis")
+    q.add_argument("texto", nargs="+")
+    q.add_argument("--k", type=int, default=3)
+
+    sub.add_parser("ncm-atualizar", help="baixa a tabela NCM oficial, compara e registra (1x por dia)")
+    ex = sub.add_parser("exemplos", help="gera notas sintéticas de exemplo com erros plantados")
+    ex.add_argument("--destino", default=None)
+    av = sub.add_parser("avaliar-publico", help="semáforo numa amostra do dado público (mês que o modelo não viu)")
+    av.add_argument("--mes", default="202509")
+    av.add_argument("--amostra", type=int, default=50_000)
+    pn = sub.add_parser("painel", help="página local (só 127.0.0.1) com as 3 portas")
+    pn.add_argument("--porta", type=int, default=8765)
     return p
+
+
+PRODUTO = {
+    "auditar", "cadastro", "cadastro-exportar", "pesquisar", "ncm-atualizar", "exemplos", "painel", "avaliar-publico",
+}  # fmt: skip
+
+
+def produto(args, paths: Paths) -> int:
+    """Comandos do produto: saída em texto simples, para gente ler."""
+    from datetime import datetime
+    from pathlib import Path
+
+    from raio_x_fiscal.config import ROOT
+    from raio_x_fiscal.produto import motor
+
+    def ctx(com_modelo=True, regras=None):
+        return motor.Contexto.padrao(paths.data, paths.models, Path(regras) if regras else None, com_modelo)
+
+    def pasta_saida(nome):
+        return Path(nome) if nome else ROOT / "saida-local" / datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+    if args.cmd == "auditar":
+        from raio_x_fiscal.produto import cadastro as CAD
+        from raio_x_fiscal.produto import relatorio
+        from raio_x_fiscal.produto.nfe import ler_entrada
+
+        regras = args.regras
+        if regras is None and (Path(args.entrada) / "regras-do-escritorio.csv").exists():
+            regras = str(Path(args.entrada) / "regras-do-escritorio.csv")
+        c = ctx(not args.sem_modelo, regras)
+        if args.cadastro:
+            df, _ = CAD.ler_planilha(Path(args.cadastro))
+            cols = CAD.achar_colunas(list(df.columns))
+            c.cadastro = {
+                "codigo": {str(k): CAD.so_digitos(v) for k, v in zip(df[cols["codigo"]], df[cols["ncm"]], strict=True)}
+                if "codigo" in cols
+                else {},
+                "gtin": {
+                    CAD.so_digitos(k): CAD.so_digitos(v)
+                    for k, v in zip(df[cols["gtin"]], df[cols["ncm"]], strict=True)
+                    if k
+                }
+                if "gtin" in cols
+                else {},
+            }
+        leitura = ler_entrada(Path(args.entrada))
+        res = motor.auditar_notas(leitura, c)
+        out = pasta_saida(args.saida)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "relatorio.html").write_text(relatorio.html_notas(res, str(args.entrada)), encoding="utf-8")
+        relatorio.xlsx_notas(res, out / "relatorio.xlsx")
+        if not res.itens.empty:
+            res.itens.drop(columns=["_achados", "nivel"]).to_csv(
+                out / "itens.csv", sep=";", index=False, encoding="utf-8-sig"
+            )
+        s = res.resumo
+        print(f"{s['notas']} notas, {s['itens']} itens: {s['vermelho']} vermelho, {s['amarelo']} amarelo, "
+              f"{s['verde']} verde ({s['aceitos_escritorio']} alertas aceitos pela regra do escritório).")  # fmt: skip
+        for a in res.avisos[:10]:
+            print("aviso:", a)
+        print(f"Relatório: {out / 'relatorio.html'}\nPlanilha:  {out / 'relatorio.xlsx'}")
+        return 0
+
+    if args.cmd == "cadastro":
+        from raio_x_fiscal.produto import cadastro as CAD
+        from raio_x_fiscal.produto import relatorio
+
+        df, info = CAD.ler_planilha(Path(args.planilha))
+        out_df, s = CAD.auditar_cadastro(df, ctx(not args.sem_modelo))
+        out = pasta_saida(args.saida)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "relatorio-cadastro.html").write_text(
+            relatorio.html_cadastro(out_df, s, args.planilha), encoding="utf-8"
+        )
+        relatorio.xlsx_cadastro(out_df, s, out / "correcao-cadastro.xlsx")
+        layout = "exportação do Bling" if CAD.eh_exportacao_bling(list(df.columns)) else "planilha genérica"
+        cont = f"{s['vermelho']} vermelho, {s['amarelo']} amarelo, {s['verde']} verde"
+        print(f"{s['produtos']} produtos ({layout}): {cont}.")
+        print(f"Relatório: {out / 'relatorio-cadastro.html'}\nCorreção:  {out / 'correcao-cadastro.xlsx'}")
+        return 0
+
+    if args.cmd == "cadastro-exportar":
+        from raio_x_fiscal.produto import cadastro as CAD
+
+        corr = Path(args.correcao)
+        r = CAD.exportar_aprovados(corr, Path(args.saida) if args.saida else corr.parent)
+        bling = "sim" if r["layout_bling"] else "não"
+        print(f"{r['linhas_alteradas']} produtos com NCM alterado. Layout do Bling: {bling}.")
+        for a in r["arquivos"]:
+            print("Arquivo:", a)
+        for a in r["avisos"]:
+            print("aviso:", a)
+        return 0
+
+    if args.cmd == "pesquisar":
+        texto = " ".join(args.texto)
+        res = motor.pesquisar(texto, ctx(True), k=args.k)
+        print(f"{texto}:")
+        for r in res:
+            print(f"  {r['ncm_formatado']}  {r['confianca']:.0%}  {r['descricao_oficial']}")
+        return 0
+
+    if args.cmd == "ncm-atualizar":
+        from raio_x_fiscal.produto.ncm_tabela import atualizar_tabela
+
+        linha = atualizar_tabela(paths.data)
+        print(json.dumps(linha, ensure_ascii=False))
+        return 2 if linha["resultado"] == "erro" else 0
+
+    if args.cmd == "exemplos":
+        from raio_x_fiscal.produto import exemplos
+
+        print(json.dumps(exemplos.gerar(Path(args.destino) if args.destino else ROOT / "exemplos"), ensure_ascii=False))
+        return 0
+
+    if args.cmd == "avaliar-publico":
+        from raio_x_fiscal.produto.avaliacao import RELATORIO, avaliar
+
+        out = avaliar(paths, args.mes, args.amostra)
+        print(json.dumps({k: v for k, v in out.items() if k != "por_regra"}, ensure_ascii=False))
+        print("Relatório:", RELATORIO)
+        return 0
+
+    if args.cmd == "painel":
+        from raio_x_fiscal.produto.servidor import criar_servidor
+
+        srv = criar_servidor(ctx(True), ROOT / "saida-local" / "painel", args.porta)
+        print(f"Painel em http://127.0.0.1:{args.porta}  (só nesta máquina; Ctrl+C para parar)")
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            srv.server_close()
+        return 0
+    raise SystemExit(2)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -95,6 +269,8 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%H:%M:%S",
     )
     paths = Paths.from_env()
+    if args.cmd in PRODUTO:
+        return produto(args, paths)
     paths.ensure()
     out: object
 

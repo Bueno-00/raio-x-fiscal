@@ -6,12 +6,18 @@
 #   make ml                           dataset (split temporal) -> treino/avaliacao -> auditoria de NCM
 #   make publish                      dataset anonimizado + dataset card (sem publicar nada)
 #   make test / make lint             pytest offline / ruff
+#
+# Produto (tudo local; notas de cliente ficam em entrada-local/, fora do git):
+#   make exemplo                      gera as notas sintéticas e o relatório delas em saida-local/exemplo
+#   make auditar                      confere entrada-local/ -> saida-local/<data-hora>/relatorio.html + .xlsx
+#   make painel                       página local em http://127.0.0.1:8765 (Ctrl+C para parar)
+#   make ncm-atualizar                robô da tabela NCM oficial (rodar 1x por dia)
 
 PY      ?= .venv/bin/python
 RXF     ?= .venv/bin/rxf
 MESES   ?= 202504-202509
 
-.PHONY: install pipeline download bronze silver quality gold report ml ml-dataset ml-train ml-audit publish test lint clean-data
+.PHONY: exemplo auditar painel ncm-atualizar install pipeline download bronze silver quality gold report ml ml-dataset ml-train ml-audit publish test lint clean-data
 
 install:
 	python3 -m venv .venv
@@ -53,3 +59,18 @@ lint:
 
 clean-data:
 	rm -rf data/bronze data/silver data/gold data/quality data/ml data/publish data/tmp
+
+exemplo:
+	$(RXF) exemplos
+	$(RXF) auditar exemplos/notas --regras exemplos/regras-do-escritorio.csv --saida saida-local/exemplo
+	$(RXF) cadastro exemplos/cadastro-loja-a.csv --saida saida-local/exemplo
+
+auditar:
+	@mkdir -p entrada-local
+	$(RXF) auditar entrada-local
+
+painel:
+	$(RXF) painel
+
+ncm-atualizar:
+	$(RXF) ncm-atualizar

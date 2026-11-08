@@ -17,6 +17,11 @@ uma auditoria que aponta NCMs declarados que provavelmente estão errados.
 > dígitos no mês de teste e **60,0% / 76,1%** (top-1 / top-5) nas descrições nunca vistas. Auditoria de
 > NCM: 3.580 alertas no mês de teste; numa inspeção manual de 60, **50 (83%)** eram NCM declarado errado
 > com a sugestão do modelo correta, e 3 (5%) eram erro do modelo.
+>
+> **Produto (07/11/2026).** Confere XML de NF-e, a planilha do cadastro ou uma descrição digitada e devolve um
+> semáforo por item com o motivo e a sugestão de NCM e CFOP. Numa amostra real de 50.000 itens de um mês
+> que o modelo não viu: **0,6% vermelho, 4,5% amarelo, 94,9% verde**, 1.629 itens por segundo em CPU.
+> Tabela NCM oficial conferida por um robô diário com histórico de versões. Tudo local.
 <!-- RESULTS_BOX_END -->
 
 ---
@@ -58,6 +63,93 @@ terceiros, milhares de classes hierárquicas e custo real quando a classe sai er
    com Airflow 2.10.5.
 6. **Dataset anonimizado pronto para publicar** na FASE 2 (Kaggle / Hugging Face), com dataset card
    ([docs/DATASET_CARD.md](docs/DATASET_CARD.md)).
+
+## O produto: conferência das notas antes de importar (novo, 07/11/2026)
+
+Além do pipeline e do modelo, o repositório agora tem um **produto que roda na máquina de quem usa**:
+recebe as notas, o cadastro de produtos ou uma descrição digitada e devolve um **semáforo por item**
+(verde ok, amarelo conferir, vermelho erro provável), com **o motivo em português, o que fazer e a
+sugestão de NCM e CFOP**. Sai um relatório HTML (para ler) e uma planilha XLSX (para trabalhar).
+Nenhuma nota sai da máquina: nada de API externa, nada de nuvem. Código em `src/raio_x_fiscal/produto/`.
+
+**3 portas de entrada, um motor só:**
+
+| Porta | Entrada | Comando | Para quê |
+|---|---|---|---|
+| 1. Notas (principal) | XML de NF-e/NFC-e: arquivos soltos, pasta (uma subpasta por empresa) ou `.zip` | `rxf auditar <pasta>` | conferir as notas do mês antes de importar no sistema contábil |
+| 2. Cadastro | planilha de produtos exportada do sistema (CSV ou XLSX; reconhece a exportação do Bling) | `rxf cadastro <planilha>` | conferir o NCM **antes** de emitir |
+| 3. Pesquisa | descrição digitada ("leite condensado 395 g") | `rxf pesquisar "<texto>"` | os 3 NCMs mais prováveis, com a descrição oficial e a confiança |
+
+`rxf painel` abre as 3 portas numa página local (só em `127.0.0.1`, porta 8765).
+
+**Checagens por item** (cada uma é uma regra simples, o modelo entra onde a regra não alcança):
+
+| Checagem | Nível | Como decide |
+|---|---|---|
+| NCM não combina com a descrição | vermelho / amarelo | modelo da fase 1: vermelho com confiança ≥ 0,99 e NCM diferente (o limiar da auditoria; 50 de 60 alertas inspecionados à mão eram erro real); amarelo com ≥ 0,90 e o NCM da nota fora dos 5 mais prováveis. Sugestões só com códigos que existem na tabela oficial vigente |
+| NCM inexistente ou fora de vigência | vermelho / amarelo | tabela oficial do Siscomex **na data da nota** (vermelho); para nota mais antiga que a primeira tabela guardada, compara com a de hoje (amarelo) |
+| NCM vazio ou com menos de 8 dígitos | vermelho | formato (item de serviço com ISSQN e NCM 00 é aceito) |
+| CFOP x estados | amarelo | 5.xxx numa nota para outro estado, 6.xxx dentro do estado, 7.xxx sem exterior; sugere o CFOP espelho. **Venda presencial com 5.xxx fica verde sozinha.** Nunca vermelho: pode ser de propósito |
+| CFOP de entrada em nota de saída (ou o contrário) | vermelho | primeiro dígito x `tpNF` |
+| CST x regime | vermelho | empresa do Simples (CRT 1 ou 4) com CST de regime normal, ou o contrário com CSOSN |
+| Mesmo produto com NCM diferente | amarelo | mesmo código do emitente ou mesmo GTIN com NCMs diferentes entre notas da pasta |
+| Nota x cadastro | amarelo | com `--cadastro`, NCM da nota diferente do NCM do cadastro (por GTIN ou código) |
+| GTIN inválido | amarelo | tamanho e dígito verificador (GS1) |
+| Nota cancelada | amarelo | evento de cancelamento (110111) na mesma pasta: "não importe" |
+
+**Regra do escritório.** Às vezes o escritório usa um CFOP de propósito. Um CSV simples
+(`cnpj_empresa;regra;cfop;ncm;codigo_produto;motivo`, vazio = qualquer) diz o que é aceito por empresa;
+o alerta continua no relatório, mas vira verde com o motivo, e para de cansar quem revisa. Se a pasta
+das notas tiver um `regras-do-escritorio.csv`, ele é usado automaticamente.
+
+**Tabela NCM sempre atualizada.** `rxf ncm-atualizar` baixa a tabela oficial do
+[Portal Único Siscomex](https://portalunico.siscomex.gov.br/classif/api/publico/nomenclatura/download/json?perfil=PUBLICO),
+tira o hash do conteúdo (ignorando o "Vigente em" do dia) e compara com a última versão: se mudou,
+guarda a nova com data em `data/ncm/versoes/`; se não mudou, registra "sem mudança" em
+`data/ncm/registro.csv`, para provar que rodou. A tabela oficial só traz o que vale hoje, por isso a
+história é guardada aqui, e a checagem "NCM na data da nota" usa a versão certa. Uma cópia de
+07/11/2026 vai no pacote para funcionar logo depois do `git clone`. O agendamento fica com quem opera
+o servidor; a linha sugerida (todo dia às 6h) é:
+
+```
+0 6 * * * cd /caminho/raio-x-fiscal && .venv/bin/rxf ncm-atualizar >> data/ncm/cron.log 2>&1
+```
+
+**Medido** (07/11/2026):
+
+- **Notas de exemplo** (`exemplos/`, XML sintéticos com erros plantados, 3 empresas fictícias, um `.zip`
+  e um cancelamento): 15 notas, 41 itens: 7 vermelho, 7 amarelo, 27 verde, 2 alertas aceitos pela regra
+  do escritório. Cada erro plantado é pego pela regra certa (testes em `tests/test_produto.py`).
+- **Amostra real do dado público**, 50.000 itens (13.361 notas) de 2025-09, mês que o modelo nunca viu:
+  **0,6% vermelho, 4,5% amarelo, 94,9% verde**; 1.629 itens por segundo em CPU de 2 núcleos. Ou seja:
+  de cada 1.000 itens, a pessoa olha 6 com atenção. Detalhes em
+  [reports/produto_amostra_publica.md](reports/produto_amostra_publica.md).
+- 84 testes passando (26 do produto), `ruff` limpo.
+
+**Precisa de gente para revisar tudo?** Não. O modelo e as regras fazem a triagem; a pessoa olha o
+vermelho (0,6% dos itens na amostra) e decide; o amarelo que for de propósito vira regra do
+escritório. O acerto do modelo é medido sozinho todo mês: treina com os meses anteriores e mede num mês
+que ele não viu (`rxf avaliar-publico --mes AAAAMM`), sem ninguém conferindo item por item.
+
+**Planilha corrigida de volta no sistema.** A planilha de correção tem a coluna "NCM aprovado": a
+pessoa troca só onde concorda, e `rxf cadastro-exportar` devolve **só as linhas que mudaram, no layout
+original**.
+- **Bling: dá.** A ajuda oficial (acessada em 07/11/2026) diz que dá para exportar, editar o NCM e
+  importar de volta em "Importar e Atualizar produtos" com a operação "Atualizar"; a chave é a coluna
+  **ID**; célula apagada apaga o dado no cadastro; no máximo 1.000 produtos por arquivo. Por isso a
+  exportação mantém todas as colunas e o ID, mexe só no NCM e divide em partes de 1.000
+  ([Como editar e atualizar meus produtos por planilha](https://ajuda.bling.com.br/hc/pt-br/articles/360060827554),
+  [Cadastrar produtos simples por planilha](https://ajuda.bling.com.br/hc/pt-br/articles/360062630653)).
+- **Domínio (Thomson Reuters): não achei leiaute público** de importação de cadastro de produtos. O que
+  a página oficial de atualizações diz (02/12/2024) é que o Domínio **compara o NCM do produto com o
+  NCM da nota e cria uma nova vigência sozinho** quando eles diferem
+  ([dominiosistemas.com.br/atualizacoes](https://www.dominiosistemas.com.br/atualizacoes)). Então o
+  lugar certo para corrigir é **antes de importar** (a porta 1) e no sistema que emite a nota; o
+  relatório entrega a lista para o contador.
+
+**Notas reais, só local.** `entrada-local/` e `saida-local/` estão no `.gitignore`. `make auditar`
+confere o que estiver em `entrada-local/` e grava `saida-local/<data-hora>/relatorio.html` e
+`relatorio.xlsx`. Notas de cliente nunca vão para o git, para o Kaggle nem para API externa.
 
 ## Arquitetura
 
@@ -276,6 +368,9 @@ raio-x-fiscal/
 │   │   ├── audit.py          # alertas de NCM + amostra para inspeção
 │   │   └── predict.py        # inferência por CLI / classe NcmPredictor
 │   ├── publish/dataset.py    # dataset anonimizado para Kaggle/HF
+│   ├── produto/              # o produto: nfe.py (XML), regras.py, motor.py, cadastro.py (planilha/Bling),
+│   │                         #   ncm_tabela.py (tabela oficial + robô diário), relatorio.py (HTML/XLSX),
+│   │                         #   servidor.py (painel 127.0.0.1), avaliacao.py (amostra pública), exemplos.py
 │   └── seeds/                # capítulos NCM (97) e UFs
 ├── dags/raio_x_fiscal_dag.py # Airflow (TaskFlow, mapeamento dinâmico por mês)
 ├── airflow/docker-compose.yml
@@ -308,6 +403,10 @@ raio-x-fiscal/
 
 ## Roadmap
 
+**Produto, próximos passos.** CFOP de entrada sugerido a partir do histórico do escritório (o "de-para"
+que hoje é manual); `cClassTrib` x NCM depois de 2027 (reforma tributária); trocar o modelo do semáforo
+pelo BERTimbau da fase 2 se ele ganhar no mês de teste; o chat de dúvidas dentro do relatório (projeto A).
+
 **FASE 2: modelo publicado.** Fine-tuning de um encoder PT-BR (BERTimbau base ou similar) no Kaggle
 (GPU gratuita) sobre o dataset anonimizado desta fase, com o mesmo protocolo de split e os mesmos
 quatro subconjuntos, para comparar diretamente com o baseline. Entregas: dataset + notebook no Kaggle,
@@ -323,7 +422,10 @@ WhatsApp (12 personas, cliente simulado, juiz pinado, custo por papel; repositó
 
 ## Testes e lint
 
-`make test` roda 50+ testes offline em segundos: parse do CSV latin-1 e dos decimais BR, contrato de
+`make test` roda 84 testes offline em segundos (26 do produto: leitura de XML, pasta e zip, recusa de XML
+perigoso, cada regra com caso certo e errado, regra do escritório, robô da tabela NCM sem internet,
+modelo minúsculo para NCM x descrição e pesquisa, relatório que escapa o texto da nota, ida e volta da
+planilha do Bling e o painel local); além disso: parse do CSV latin-1 e dos decimais BR, contrato de
 schema (drift falha), regras de normalização em Python e SQL (paridade), rejects e dedup, idempotência
 de bronze/silver/gold, expectations com as divergências conhecidas da fixture, máscara de CPF, split
 sem vazamento, modelo hierárquico (shapes, probabilidades, calibração), inferência após
