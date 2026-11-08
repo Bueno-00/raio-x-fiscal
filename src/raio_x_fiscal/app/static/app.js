@@ -19,6 +19,8 @@
         if (!Object.prototype.hasOwnProperty.call(attrs, k) || attrs[k] == null || attrs[k] === false) continue;
         if (k === "class") el.className = attrs[k];
         else if (k === "text") el.textContent = attrs[k];
+        // pelo CSSOM: o CSP (style-src 'self') bloqueia o atributo style, não el.style
+        else if (k === "style") el.style.cssText = attrs[k];
         else if (k.slice(0, 2) === "on") el.addEventListener(k.slice(2), attrs[k]);
         else el.setAttribute(k, attrs[k] === true ? "" : attrs[k]);
       }
